@@ -4,7 +4,8 @@ node_modules/
 .env.*.local
 data/memory/*.json
 !data/memory/.gitkeep
-storage/
+storage/*
+!storage/.gitkeep
 *.storage.json
 karlancer-storage-state.json
 screenshots/
