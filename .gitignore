@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+data/memory/*.json
+!data/memory/.gitkeep
+storage/
+*.storage.json
+karlancer-storage-state.json
+screenshots/
+*.png
+*.jpg
+.DS_Store
+dist/
+coverage/
+*.log
+npm-debug.log*
