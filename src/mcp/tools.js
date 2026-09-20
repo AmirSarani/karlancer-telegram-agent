@@ -9,7 +9,7 @@ import { buildHealth } from '../observability/health.js';
 import { memorySearch, memoryAppend } from '../memory/store.js';
 import { recommendPrice } from '../intelligence/pricing.js';
 import { getInsight, recordFeedback } from '../intelligence/engine.js';
-import { requireToolPermission } from '../security/auth.js';
+import { requireToolPermission, assertTenantAccess, canAccessCrossTenant } from '../security/auth.js';
 import { redactDeep } from '../security/redaction.js';
 import { bidIdempotencyKey, messageIdempotencyKey } from '../api/contracts/verified-mutation.js';
 
@@ -30,6 +30,23 @@ function errResult(code, message, extra = {}) {
  */
 export function registerTools(server, ctx) {
   const { db, queue, api, startedAt, getScopes = () => ['admin'], getTenantId = () => 'default' } = ctx;
+
+  /** Tenant named `default` is scoped like any other tenant. */
+  function denyIfWrongTenant(resourceTenantId) {
+    const check = assertTenantAccess({
+      requesterTenantId: getTenantId(),
+      resourceTenantId,
+      scopes: getScopes(),
+    });
+    if (!check.ok) return errResult('forbidden', 'tenant isolation');
+    return null;
+  }
+
+  /** null = all tenants; only when explicit cross_tenant_admin | super_admin. */
+  function tenantListFilter() {
+    if (canAccessCrossTenant(getScopes())) return null;
+    return getTenantId();
+  }
 
   const guard = (meta, fn) => async (args) => {
     const scopes = getScopes();
@@ -355,10 +372,8 @@ export function registerTools(server, ctx) {
     guard({ name: 'job.get_status', permission: 'read' }, async ({ jobId }) => {
       const job = queue.get(jobId);
       if (!job) return errResult('not_found', 'job not found');
-      const tenant = getTenantId();
-      if (tenant !== 'default' && job.tenantId !== tenant) {
-        return errResult('forbidden', 'tenant isolation');
-      }
+      const denied = denyIfWrongTenant(job.tenantId);
+      if (denied) return denied;
       return textResult(job);
     })
   );
@@ -372,10 +387,8 @@ export function registerTools(server, ctx) {
     guard({ name: 'job.cancel', permission: 'write' }, async ({ jobId }) => {
       const job = queue.get(jobId);
       if (!job) return errResult('not_found', 'job not found');
-      const tenant = getTenantId();
-      if (tenant !== 'default' && job.tenantId !== tenant) {
-        return errResult('forbidden', 'tenant isolation');
-      }
+      const denied = denyIfWrongTenant(job.tenantId);
+      if (denied) return denied;
       if (!['queued', 'waiting_for_approval', 'planning'].includes(job.status)) {
         return errResult('not_cancellable', `status=${job.status}`);
       }
@@ -473,7 +486,7 @@ export function registerTools(server, ctx) {
       annotations: { readOnlyHint: true },
     },
     guard({ name: 'approvals.list', permission: 'read' }, async () => {
-      return textResult({ pending: queue.pendingApprovals(getTenantId() === 'default' ? null : getTenantId()) });
+      return textResult({ pending: queue.pendingApprovals(tenantListFilter()) });
     })
   );
 
@@ -487,10 +500,8 @@ export function registerTools(server, ctx) {
     guard({ name: 'approvals.get', permission: 'read' }, async ({ approvalId }) => {
       const a = queue.getApproval(approvalId);
       if (!a) return errResult('not_found', 'approval not found');
-      const tenant = getTenantId();
-      if (tenant !== 'default' && a.tenant_id !== tenant) {
-        return errResult('forbidden', 'tenant isolation');
-      }
+      const denied = denyIfWrongTenant(a.tenant_id);
+      if (denied) return denied;
       return textResult(a);
     })
   );
@@ -509,10 +520,8 @@ export function registerTools(server, ctx) {
     guard({ name: 'approvals.decide', permission: 'approve' }, async ({ approvalId, approve, decidedBy, expectedPayloadHash }) => {
       const existing = queue.getApproval(approvalId);
       if (!existing) return errResult('not_found', 'approval not found');
-      const tenant = getTenantId();
-      if (tenant !== 'default' && existing.tenant_id !== tenant) {
-        return errResult('forbidden', 'tenant isolation');
-      }
+      const denied = denyIfWrongTenant(existing.tenant_id);
+      if (denied) return denied;
       const result = queue.decideApproval(approvalId, {
         approve,
         decidedBy: decidedBy || 'mcp',
@@ -533,19 +542,20 @@ export function registerTools(server, ctx) {
       annotations: { readOnlyHint: true },
     },
     guard({ name: 'audit.search', permission: 'read' }, async ({ limit }) => {
-      const tenant = getTenantId();
+      const filter = tenantListFilter();
+      const lim = limit || 50;
       const rows =
-        tenant === 'default'
+        filter == null
           ? db
               .prepare(
                 `SELECT id, tenant_id, actor, action, tool, result_code, correlation_id, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`
               )
-              .all(limit || 50)
+              .all(lim)
           : db
               .prepare(
                 `SELECT id, tenant_id, actor, action, tool, result_code, correlation_id, created_at FROM audit_log WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`
               )
-              .all(tenant, limit || 50);
+              .all(filter, lim);
       return textResult({ count: rows.length, rows });
     })
   );
@@ -564,7 +574,9 @@ export function registerTools(server, ctx) {
       annotations: { readOnlyHint: true },
     },
     guard({ name: 'intelligence.get_insight', permission: 'read' }, async (args) => {
+      const tenantId = getTenantId();
       const insight = getInsight(db, {
+        tenantId,
         features: {
           complexity: args.complexity,
           pages: args.pages,
@@ -572,7 +584,7 @@ export function registerTools(server, ctx) {
         },
       });
       const items = memorySearch(db, {
-        tenantId: getTenantId(),
+        tenantId,
         kind: 'insight',
         q: args.q || '',
         limit: 10,

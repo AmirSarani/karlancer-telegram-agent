@@ -16,3 +16,9 @@ Trust boundaries: MCP host → MCP server → adapters → Karlancer → SQLite 
 - `MCP_API_KEY` + `MCP_API_KEY_TENANT` (default `default`), or `MCP_API_KEYS=hash:scopes:tenantId`.
 - Cross-tenant job/approval/memory/audit access returns forbidden / not_found.
 - Approval decide recomputes hash from **job** payload; `approvals.payload_json` must exactly equal `jobs.payload_json` or decide fails with `payload_tampered` (job never queued).
+
+## Multi-tenant (hardened)
+
+- Tenant id `default` is **not** a wildcard / super-admin. It is scoped exactly like any other tenant.
+- Cross-tenant job/approval/memory/audit access requires explicit scope `cross_tenant_admin` or `super_admin`.
+- Intelligence (`getInsight` / feedback / pricing memory) is tenant-scoped; feedback from tenant-b must not appear in default or tenant-a.

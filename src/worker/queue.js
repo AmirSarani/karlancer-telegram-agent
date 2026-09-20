@@ -203,11 +203,29 @@ export function createJobQueue(db) {
     claim(workerId, { leaseMs = 60_000 } = {}) {
       const now = new Date();
       const nowIso = now.toISOString();
-      // Requeue ONLY expired leases without recent heartbeat (lease_until past)
-      db.prepare(
-        `UPDATE jobs SET status = 'queued', worker_id = NULL, lease_until = NULL, updated_at = ?
-         WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until < ?`
-      ).run(nowIso, nowIso);
+      // Expired leases: never auto-requeue mutation goals (bids.submit / messages.send / messages.mark_seen).
+      // Those go to needs_reconciliation so a second POST cannot happen after crash-mid-flight.
+      const expired = db
+        .prepare(
+          `SELECT job_id, goal FROM jobs
+           WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until < ?`
+        )
+        .all(nowIso);
+      const mutationGoals = new Set(['bids.submit', 'messages.send', 'messages.mark_seen']);
+      for (const row of expired) {
+        if (mutationGoals.has(row.goal)) {
+          db.prepare(
+            `UPDATE jobs SET status = 'needs_reconciliation', worker_id = NULL, lease_until = NULL,
+             error_code = COALESCE(error_code, 'lease_expired_during_mutation'), updated_at = ?
+             WHERE job_id = ? AND status = 'running'`
+          ).run(nowIso, row.job_id);
+        } else {
+          db.prepare(
+            `UPDATE jobs SET status = 'queued', worker_id = NULL, lease_until = NULL, updated_at = ?
+             WHERE job_id = ? AND status = 'running'`
+          ).run(nowIso, row.job_id);
+        }
+      }
 
       const job = db
         .prepare(

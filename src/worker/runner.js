@@ -4,7 +4,7 @@
  */
 import crypto from 'node:crypto';
 import { loadAppConfig } from '../config.js';
-import { openDb, acquireSingleNodeLock } from '../memory/db.js';
+import { openDb, acquireSingleWorkerConsumerLock } from '../memory/db.js';
 import { createJobQueue } from './queue.js';
 import { createKarlancerApi } from '../api/adapters/index.js';
 import { handleJob } from './handlers.js';
@@ -139,7 +139,7 @@ if (isMain) {
   const db = openDb(config.dbPath);
   let nodeLock;
   try {
-    nodeLock = acquireSingleNodeLock(db, `worker-${process.pid}`);
+    nodeLock = acquireSingleWorkerConsumerLock(db, `worker-${process.pid}`);
     nodeLock.startHeartbeat();
   } catch (e) {
     logger.error('single_node_lock', { err: e.message, holder: e.holder });

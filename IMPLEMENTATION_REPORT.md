@@ -46,3 +46,14 @@ See `docs/OPERATIONS.md`, `docs/MCP_PRODUCTION.md`, `configs/cursor-mcp.json.exa
 - Single-node lock heartbeat wired in index + worker; test proves live lock not stealable.
 - Multi-tenant: API key → tenantId; tools + `/jobs` scoped.
 - Clean verify: npm test 75/0, test:e2e 3/0/1 skip, guard:playwright OK, docker build OK.
+
+## Final hardening (PR #1)
+
+- Tenant `default` is not a wildcard; cross-tenant requires `cross_tenant_admin` | `super_admin`.
+- Intelligence/pricing/feedback memory is tenant-scoped (`getInsight(tenantId)`, `recordFeedback` → `memoryAppend(tenantId)`).
+- Expired mutation leases (`bids.submit` / `messages.send` / `messages.mark_seen`) → `needs_reconciliation` (no second POST).
+- Pre-mutation revalidation of approval/expiry/tenant/action/targetRef/payload before POST.
+- VerifiedMutationContract loader fail-closed (no `z.any` fallback for unknown schemas).
+- MCP sessions: TTL, cleanup interval, max count, shutdown cleanup.
+- Lock renamed/aliased to single-worker-consumer; Karlancer credential default shared + optional encrypted per-tenant path.
+- CI: `test:e2e:mock` required; `test:live` honest-skip without token.

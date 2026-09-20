@@ -15,7 +15,7 @@ test('pricing recommendation includes approval flag', () => {
 
 test('intelligence returns insufficient_data without samples', () => {
   const db = openDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'klr-')), 'i.sqlite'));
-  const insight = getInsight(db, { features: { complexity: 'low', pages: 3 } });
+  const insight = getInsight(db, { tenantId: 'default', features: { complexity: 'low', pages: 3 } });
   assert.equal(insight.status, 'insufficient_data');
   assert.equal(insight.requiresApproval, true);
   assert.equal(insight.mlInProduction, false);

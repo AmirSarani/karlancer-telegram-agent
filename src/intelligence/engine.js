@@ -33,10 +33,11 @@ function inferType(project) {
  * Layer 4 recommendation — always requires human approval.
  * Returns insufficient_data when memory evidence is too thin.
  */
-export function getInsight(db, { project, features: featIn } = {}) {
+export function getInsight(db, { project, features: featIn, tenantId } = {}) {
+  if (!tenantId) throw new Error('tenantId_required');
   const features = extractFeatures(project || {}, featIn || {});
-  const history = memorySearch(db, { kind: 'pricing_decision', limit: 50 });
-  const feedback = memorySearch(db, { kind: 'intelligence_feedback', limit: 50 });
+  const history = memorySearch(db, { tenantId, kind: 'pricing_decision', limit: 50 });
+  const feedback = memorySearch(db, { tenantId, kind: 'intelligence_feedback', limit: 50 });
 
   const minSamples = 3;
   const insufficient = history.length + feedback.length < minSamples;
@@ -123,6 +124,7 @@ export function recordFeedback(db, {
     now
   );
   memoryAppend(db, {
+    tenantId,
     kind: 'intelligence_feedback',
     refId: recommendationId || id,
     content: `${humanDecision || ''} ${feedback || ''}`.trim(),

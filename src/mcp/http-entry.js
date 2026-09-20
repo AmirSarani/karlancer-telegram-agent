@@ -11,7 +11,7 @@ import { openDb } from '../memory/db.js';
 import { createJobQueue } from '../worker/queue.js';
 import { createKarlancerApi } from '../api/adapters/index.js';
 import { createMcpServer } from './create-server.js';
-import { loadApiKeyRegistry, authorizeApiKey, hashApiKey } from '../security/auth.js';
+import { loadApiKeyRegistry, authorizeApiKey, hashApiKey, assertTenantAccess, canAccessCrossTenant } from '../security/auth.js';
 import { buildHealth } from '../observability/health.js';
 import { logger } from '../observability/logger.js';
 import { RateLimiter } from '../api/rate-limit.js';
@@ -52,6 +52,39 @@ const llm = createLlmProvider({
 
 /** @type {Record<string, { transport: StreamableHTTPServerTransport, keyHash: string, scopes: string[] }>} */
 const transports = {};
+
+const SESSION_TTL_MS = Number(process.env.MCP_SESSION_TTL_MS || 30 * 60 * 1000);
+const SESSION_CLEANUP_INTERVAL_MS = Number(process.env.MCP_SESSION_CLEANUP_INTERVAL_MS || 60_000);
+const MAX_MCP_SESSIONS = Number(process.env.MCP_MAX_SESSIONS || 100);
+
+function touchSession(sessionId) {
+  const row = transports[sessionId];
+  if (row) row.lastSeenAt = Date.now();
+}
+
+function cleanupExpiredSessions() {
+  const now = Date.now();
+  for (const [sid, row] of Object.entries(transports)) {
+    const last = row.lastSeenAt || row.createdAt || 0;
+    if (now - last > SESSION_TTL_MS) {
+      try {
+        row.transport?.close?.();
+      } catch {
+        /* ignore */
+      }
+      delete transports[sid];
+      try {
+        db.prepare(`DELETE FROM mcp_sessions WHERE session_id = ?`).run(sid);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+const sessionCleanupTimer = setInterval(cleanupExpiredSessions, SESSION_CLEANUP_INTERVAL_MS);
+if (typeof sessionCleanupTimer.unref === 'function') sessionCleanupTimer.unref();
+
 
 function getKey(req) {
   const h = req.headers['authorization'] || '';
@@ -175,7 +208,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const tenantId = auth.tenantId || 'default';
-    if (tenantId !== 'default' && job.tenantId !== tenantId) {
+    const access = assertTenantAccess({
+      requesterTenantId: tenantId,
+      resourceTenantId: job.tenantId,
+      scopes: auth.scopes || [],
+    });
+    if (!access.ok) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'forbidden', code: 'tenant_isolation' }));
       return;
@@ -212,6 +250,7 @@ const server = http.createServer(async (req, res) => {
 
         if (sessionId && transports[sessionId]) {
           // Session must be bound to same credential
+          touchSession(sessionId);
           if (!sessionAllowed(sessionId, auth.keyHash)) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'session_credential_mismatch' }));
@@ -222,10 +261,16 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         if (!sessionId && isInitializeRequest(body)) {
+          cleanupExpiredSessions();
+          if (Object.keys(transports).length >= MAX_MCP_SESSIONS) {
+            res.writeHead(429, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'session_limit_exceeded', max: MAX_MCP_SESSIONS }));
+            return;
+          }
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (sid) => {
-              transports[sid] = { transport, keyHash: auth.keyHash, scopes: auth.scopes || ['read'] };
+              transports[sid] = { transport, keyHash: auth.keyHash, scopes: auth.scopes || ['read'], createdAt: Date.now(), lastSeenAt: Date.now() };
               bindSession(sid, auth.keyHash, auth.scopes || ['read']);
             },
           });
@@ -256,7 +301,8 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (sessionId && transports[sessionId]) {
-        if (!sessionAllowed(sessionId, auth.keyHash)) {
+        touchSession(sessionId);
+          if (!sessionAllowed(sessionId, auth.keyHash)) {
           res.writeHead(403, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'session_credential_mismatch' }));
           return;
@@ -279,6 +325,33 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404).end('not found');
 });
+
+
+function shutdownMcpHttp(sig) {
+  logger.info('mcp_http_shutdown', { sig });
+  clearInterval(sessionCleanupTimer);
+  for (const [sid, row] of Object.entries(transports)) {
+    try {
+      row.transport?.close?.();
+    } catch {
+      /* ignore */
+    }
+    delete transports[sid];
+    try {
+      db.prepare(`DELETE FROM mcp_sessions WHERE session_id = ?`).run(sid);
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    server.close();
+  } catch {
+    /* ignore */
+  }
+  process.exit(0);
+}
+process.once('SIGINT', () => shutdownMcpHttp('SIGINT'));
+process.once('SIGTERM', () => shutdownMcpHttp('SIGTERM'));
 
 server.listen(config.mcpHttpPort, config.mcpHttpHost, () => {
   logger.info('mcp_http_listen', { host: config.mcpHttpHost, port: config.mcpHttpPort });

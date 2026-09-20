@@ -157,6 +157,13 @@ CREATE TABLE IF NOT EXISTS intelligence_feedback (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS tenant_credentials (
+  tenant_id TEXT PRIMARY KEY,
+  token_ciphertext TEXT,
+  cookie_ciphertext TEXT,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS single_node_lock (
   lock_name TEXT PRIMARY KEY,
   holder TEXT NOT NULL,
@@ -261,3 +268,10 @@ export function acquireSingleNodeLock(db, holder, lockName = 'sqlite_primary', o
 }
 
 export default openDb;
+
+/**
+ * Alias: honest name for the SQLite single-writer / single-consumer lock.
+ * Multi-writer architecture is NOT implemented — do not run multiple writers on one DB file.
+ */
+export const acquireSingleWorkerConsumerLock = acquireSingleNodeLock;
+

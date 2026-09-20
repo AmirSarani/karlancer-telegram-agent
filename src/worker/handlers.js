@@ -15,6 +15,84 @@ import { bidIdempotencyKey } from '../api/contracts/verified-mutation.js';
  * @param {import('../intelligence/token-budget.js').TokenBudgetManager} [ctx.budget]
  * @param {Function} [ctx.onEvent]  projection hook
  */
+
+const MUTATION_GOALS = new Set(['bids.submit', 'messages.send', 'messages.mark_seen']);
+
+/**
+ * Immediately before a mutation POST: re-validate approval + identity fields.
+ * On any mismatch → no POST.
+ */
+function revalidateMutationBeforePost(ctx, job) {
+  const { queue } = ctx;
+  if (!MUTATION_GOALS.has(job.goal)) return { ok: true };
+  const approval = queue.getApprovalForJob?.(job.jobId) || queue.getApprovalByJobId?.(job.jobId);
+  // Prefer latest approval row if helper missing
+  const row =
+    approval ||
+    (() => {
+      try {
+        return ctx.db
+          .prepare(`SELECT * FROM approvals WHERE job_id = ? ORDER BY created_at DESC LIMIT 1`)
+          .get(job.jobId);
+      } catch {
+        return null;
+      }
+    })();
+
+  if (!row) {
+    return { ok: false, errorCode: 'missing_approval', detail: { reason: 'no_approval_row' } };
+  }
+  if (row.status !== 'approved') {
+    return { ok: false, errorCode: 'approval_not_approved', detail: { status: row.status } };
+  }
+  if (row.expires_at && Date.parse(row.expires_at) < Date.now()) {
+    return { ok: false, errorCode: 'approval_expired', detail: { expiresAt: row.expires_at } };
+  }
+  if ((row.tenant_id || 'default') !== (job.tenantId || 'default')) {
+    return { ok: false, errorCode: 'tenant_mismatch', detail: {} };
+  }
+  if (row.action && row.action !== job.goal) {
+    return { ok: false, errorCode: 'action_mismatch', detail: { action: row.action, goal: job.goal } };
+  }
+  let approvalPayload = {};
+  try {
+    approvalPayload = row.payload_json ? JSON.parse(row.payload_json) : {};
+  } catch {
+    return { ok: false, errorCode: 'approval_payload_unparseable', detail: {} };
+  }
+  const jobPayload = job.payload || {};
+  // Exact payload identity
+  if (JSON.stringify(approvalPayload) !== JSON.stringify(jobPayload)) {
+    return { ok: false, errorCode: 'payload_mismatch', detail: {} };
+  }
+  // targetRef check when present
+  const expectedTarget =
+    jobPayload.projectId != null
+      ? String(jobPayload.projectId)
+      : jobPayload.roomId != null
+        ? String(jobPayload.roomId)
+        : null;
+  if (row.target_ref != null && expectedTarget != null && String(row.target_ref) !== expectedTarget) {
+    return { ok: false, errorCode: 'target_ref_mismatch', detail: {} };
+  }
+  // payload hash when present — recompute via queue helper if available
+  if (row.payload_hash && typeof queue.hashApprovalPayload === 'function') {
+    // no-op; hash lives on module — check stored vs job via decide path already ran
+  }
+  if (row.payload_hash) {
+    // Compare approval payload_json bytes to job payload_json via queue.get raw if needed
+    try {
+      const jobRow = ctx.db.prepare(`SELECT payload_json FROM jobs WHERE job_id = ?`).get(job.jobId);
+      if (jobRow && String(jobRow.payload_json || '') !== String(row.payload_json || '')) {
+        return { ok: false, errorCode: 'payload_hash_mismatch', detail: { reason: 'payload_json_drift' } };
+      }
+    } catch {
+      /* ignore if db not on ctx */
+    }
+  }
+  return { ok: true, approval: row };
+}
+
 export async function handleJob(ctx, job) {
   const { api, db, llm, budget } = ctx;
   const goal = job.goal;
@@ -100,6 +178,16 @@ export async function handleJob(ctx, job) {
     }
 
     case 'bids.submit': {
+      {
+        const v = revalidateMutationBeforePost(ctx, job);
+        if (!v.ok) {
+          ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+            errorCode: v.errorCode,
+            result: v.detail,
+          });
+          return { ok: false, errorCode: v.errorCode, detail: v.detail, terminal: true, posted: false };
+        }
+      }
       // MUST use VerifiedMutationContract; no try-list. No auto-retry on unknown.
       const operationId =
         job.operationId ||
@@ -156,6 +244,16 @@ export async function handleJob(ctx, job) {
     }
 
     case 'messages.send': {
+      {
+        const v = revalidateMutationBeforePost(ctx, job);
+        if (!v.ok) {
+          ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+            errorCode: v.errorCode,
+            result: v.detail,
+          });
+          return { ok: false, errorCode: v.errorCode, detail: v.detail, terminal: true, posted: false };
+        }
+      }
       const operationId = job.operationId || p.operationId || crypto.randomUUID();
       const data = await api.messages.send(p.roomId, p.text, { operationId });
       if (!data.ok) {

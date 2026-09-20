@@ -37,3 +37,20 @@ Set `KARLANCER_ACCESS_TOKEN` in env/secret manager and restart worker **or** cal
 1. `git checkout <previous-sha>`
 2. Restore SQLite backup
 3. Redeploy compose / systemd units in `deploy/`
+
+## Karlancer credential model
+
+**Current default: SHARED.** Process-level `KARLANCER_ACCESS_TOKEN` / `KARLANCER_COOKIE` is used for all tenants (`source: shared_env`).
+
+**Optional per-tenant (encrypted at rest):** set `KARLANCER_CREDENTIAL_KEK` (32-byte base64) or `KARLANCER_CREDENTIAL_SECRET`, then store per-tenant ciphertext via `upsertTenantCredential` (`src/security/tenant-credentials.js`). Resolution order: tenant ciphertext → shared env → none.
+
+## SQLite lock (truthful)
+
+`acquireSingleWorkerConsumerLock` (alias: `acquireSingleNodeLock`) is a **single-worker-consumer / single-writer** lock. Multi-writer on one SQLite file is **not** supported. Run one writer/consumer per DB volume; use heartbeat so stale holders can be reclaimed.
+
+## MCP HTTP sessions
+
+- TTL: `MCP_SESSION_TTL_MS` (default 30m)
+- Cleanup interval: `MCP_SESSION_CLEANUP_INTERVAL_MS` (default 60s)
+- Max sessions: `MCP_MAX_SESSIONS` (default 100); excess → 429 `session_limit_exceeded`
+- Shutdown (SIGINT/SIGTERM) closes transports and deletes session rows

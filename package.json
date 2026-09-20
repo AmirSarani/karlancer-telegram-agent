@@ -11,13 +11,15 @@
     "mcp": "node src/mcp/stdio-entry.js",
     "mcp:http": "node src/mcp/http-entry.js",
     "test": "node --test tests/unit/*.test.js tests/contract/*.test.js tests/mcp/*.test.js tests/security/*.test.js tests/integration/*.test.js",
-    "test:e2e": "node --test tests/e2e_api/*.test.js",
-    "test:all": "npm test && npm run test:e2e && npm run guard:playwright",
+    "test:e2e": "npm run test:e2e:mock && npm run test:live",
+    "test:all": "npm test && npm run test:e2e:mock && npm run guard:playwright",
     "guard:playwright": "node scripts/guard-no-playwright.js",
     "handoff:project": "node scripts/project-handoff.js",
     "migrate": "node --input-type=module -e \"import { openDb } from './src/memory/db.js'; openDb(process.env.DB_PATH||'./data/agent.sqlite'); console.log('migrated');\"",
     "backup": "bash deploy/scripts/backup-sqlite.sh",
-    "lint": "node --check src/index.js && node --check src/worker/runner.js && node --check src/mcp/http-entry.js"
+    "lint": "node --check src/index.js && node --check src/worker/runner.js && node --check src/mcp/http-entry.js",
+    "test:e2e:mock": "node --test tests/e2e_api/e2e.test.js",
+    "test:live": "node --test tests/e2e_api/live.test.js"
   },
   "engines": {
     "node": ">=18"

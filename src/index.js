@@ -1,5 +1,5 @@
 import { loadAppConfig } from './config.js';
-import { openDb, acquireSingleNodeLock } from './memory/db.js';
+import { openDb, acquireSingleWorkerConsumerLock } from './memory/db.js';
 import { createJobQueue } from './worker/queue.js';
 import { createWorker } from './worker/runner.js';
 import { createKarlancerApi } from './api/adapters/index.js';
@@ -26,7 +26,7 @@ async function main() {
   const db = openDb(config.dbPath);
   let nodeLock;
   try {
-    nodeLock = acquireSingleNodeLock(db, `main-${process.pid}`);
+    nodeLock = acquireSingleWorkerConsumerLock(db, `main-${process.pid}`);
     nodeLock.startHeartbeat();
   } catch (e) {
     logger.error('single_node_lock', { err: e.message });

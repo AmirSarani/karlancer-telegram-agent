@@ -23,6 +23,35 @@ import { KarlancerApiError } from '../errors.js';
 /** @type {Map<string, VerifiedMutationContract>} */
 const REGISTRY = new Map();
 
+export const ALLOWED_MUTATION_CAPABILITIES = new Set([
+  'bids.submit',
+  'messages.send',
+  'messages.mark_seen',
+]);
+
+export const ALLOWED_MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH']);
+
+/**
+ * Validate pathTemplate: relative /api/... only; no absolute URL; no traversal.
+ */
+export function assertSafeMutationPath(pathTemplate) {
+  const p = String(pathTemplate || '');
+  if (!p.startsWith('/api/')) {
+    throw new Error('invalid_contract_path: must start with /api/');
+  }
+  if (p.includes('://') || p.startsWith('//')) {
+    throw new Error('invalid_contract_path: absolute URL forbidden');
+  }
+  if (p.includes('..') || p.includes('\0')) {
+    throw new Error('invalid_contract_path: traversal forbidden');
+  }
+  if (/\s/.test(p)) {
+    throw new Error('invalid_contract_path: whitespace forbidden');
+  }
+  return p;
+}
+
+
 /**
  * Register a contract only after real Network 2xx evidence exists.
  * @param {VerifiedMutationContract} contract
@@ -31,8 +60,32 @@ export function registerVerifiedMutation(contract) {
   if (!contract?.id || !contract?.capability || !contract?.pathTemplate) {
     throw new Error('invalid_contract');
   }
-  REGISTRY.set(contract.capability, contract);
-  return contract;
+  if (!contract.method || !contract.evidence || !contract.contractVersion) {
+    throw new Error('invalid_contract: incomplete (method/evidence/contractVersion required)');
+  }
+  if (!ALLOWED_MUTATION_CAPABILITIES.has(contract.capability)) {
+    throw new Error(`invalid_contract: capability not allowlisted: ${contract.capability}`);
+  }
+  if (!ALLOWED_MUTATION_METHODS.has(String(contract.method).toUpperCase())) {
+    throw new Error(`invalid_contract: method not allowed: ${contract.method}`);
+  }
+  assertSafeMutationPath(contract.pathTemplate);
+  if (!Array.isArray(contract.expectedStatus) || contract.expectedStatus.length === 0) {
+    throw new Error('invalid_contract: expectedStatus required');
+  }
+  if (!contract.payloadSchema || typeof contract.payloadSchema.parse !== 'function') {
+    throw new Error('invalid_contract: payloadSchema must be a Zod schema');
+  }
+  if (REGISTRY.has(contract.capability)) {
+    throw new Error(`invalid_contract: duplicate capability ${contract.capability}`);
+  }
+  const normalized = {
+    ...contract,
+    method: String(contract.method).toUpperCase(),
+    pathTemplate: assertSafeMutationPath(contract.pathTemplate),
+  };
+  REGISTRY.set(normalized.capability, normalized);
+  return normalized;
 }
 
 export function getVerifiedMutation(capability) {
