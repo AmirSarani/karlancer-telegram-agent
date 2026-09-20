@@ -1,0 +1,22 @@
+services:
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: ../.env
+    volumes:
+      - ../data:/app/data
+      - ../state:/app/state
+    restart: unless-stopped
+  mcp-http:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["node", "src/mcp/http-entry.js"]
+    env_file: ../.env
+    ports:
+      - "8787:8787"
+    volumes:
+      - ../data:/app/data
+      - ../state:/app/state
+    restart: unless-stopped

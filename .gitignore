@@ -4,6 +4,8 @@ node_modules/
 .env.*.local
 data/memory/*.json
 !data/memory/.gitkeep
+data/*.sqlite
+data/*.sqlite-*
 storage/*
 !storage/.gitkeep
 *.storage.json
@@ -16,3 +18,7 @@ dist/
 coverage/
 *.log
 npm-debug.log*
+*.tmp
+data/*
+!data/.gitkeep
+!data/memory/

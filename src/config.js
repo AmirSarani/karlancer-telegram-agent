@@ -18,35 +18,51 @@ function optional(name, fallback = '') {
 }
 
 /**
- * Load and validate runtime config from environment.
- * TELEGRAM_BOT_TOKEN is always required to start the bot.
- * TELEGRAM_OWNER_CHAT_ID is required for owner-only commands (set after first DM).
+ * Application config for API-first agent.
+ * @param {{ requireTelegram?: boolean, requireOwner?: boolean }} [opts]
  */
-export function loadConfig({ requireOwner = true } = {}) {
-  const telegramBotToken = required('TELEGRAM_BOT_TOKEN', process.env.TELEGRAM_BOT_TOKEN);
+export function loadAppConfig(opts = {}) {
+  const requireTelegram = opts.requireTelegram !== false;
+  const requireOwner = opts.requireOwner !== false;
+
+  const telegramBotToken = requireTelegram
+    ? required('TELEGRAM_BOT_TOKEN', process.env.TELEGRAM_BOT_TOKEN)
+    : optional('TELEGRAM_BOT_TOKEN');
   const ownerRaw = optional('TELEGRAM_OWNER_CHAT_ID');
   const telegramOwnerChatId = ownerRaw ? Number(ownerRaw) : null;
 
-  if (requireOwner && (telegramOwnerChatId == null || Number.isNaN(telegramOwnerChatId))) {
+  if (requireTelegram && requireOwner && (telegramOwnerChatId == null || Number.isNaN(telegramOwnerChatId))) {
     throw new Error(
       'TELEGRAM_OWNER_CHAT_ID is required. Message the bot once, copy your chat id, set it in .env, then run npm start again.'
     );
   }
 
   return {
+    root,
     telegramBotToken,
     telegramOwnerChatId,
     openaiApiKey: optional('OPENAI_API_KEY'),
     openaiBaseUrl: optional('OPENAI_BASE_URL', 'https://api.openai.com/v1').replace(/\/$/, ''),
     openaiModel: optional('OPENAI_MODEL', 'gpt-4o-mini'),
-    karlancerStorageStatePath: path.resolve(
-      root,
-      optional('KARLANCER_STORAGE_STATE_PATH', './storage/karlancer-storage-state.json')
-    ),
+    karlancerBaseUrl: optional('KARLANCER_BASE_URL', 'https://www.karlancer.com').replace(/\/$/, ''),
+    karlancerAccessToken: optional('KARLANCER_ACCESS_TOKEN'),
+    karlancerCookie: optional('KARLANCER_COOKIE'),
+    karlancerTimeoutMs: Number(optional('KARLANCER_TIMEOUT_MS', '30000')) || 30000,
     memoryDir: path.resolve(root, optional('MEMORY_DIR', './data/memory')),
-    headless: optional('HEADLESS', 'true').toLowerCase() !== 'false',
-    root,
+    dbPath: path.resolve(root, optional('DB_PATH', './data/agent.sqlite')),
+    stateDir: path.resolve(root, optional('STATE_DIR', './state')),
+    mcpHttpHost: optional('MCP_HTTP_HOST', '127.0.0.1'),
+    mcpHttpPort: Number(optional('MCP_HTTP_PORT', '8787')) || 8787,
+    mcpApiKey: optional('MCP_API_KEY'),
+    enableTelegram: optional('ENABLE_TELEGRAM', 'true').toLowerCase() !== 'false',
+    enableWorker: optional('ENABLE_WORKER', 'true').toLowerCase() !== 'false',
+    dailyTokenLimit: Number(optional('DAILY_TOKEN_LIMIT', '200000')) || 200000,
   };
 }
 
-export default loadConfig;
+/** @deprecated use loadAppConfig */
+export function loadConfig(opts = {}) {
+  return loadAppConfig({ requireTelegram: true, requireOwner: opts.requireOwner !== false });
+}
+
+export default loadAppConfig;

@@ -2,13 +2,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 /**
- * Simple JSON-file conversation memory keyed by roomId (Karlancer room / chat id).
- * One file per room under MEMORY_DIR.
+ * Legacy JSON-file conversation memory (projection helper).
+ * Prefer SQLite memory_items for new code.
  */
 export class RoomMemory {
-  /**
-   * @param {string} memoryDir
-   */
   constructor(memoryDir) {
     this.memoryDir = memoryDir;
   }
@@ -22,10 +19,6 @@ export class RoomMemory {
     await fs.mkdir(this.memoryDir, { recursive: true });
   }
 
-  /**
-   * @param {string|number} roomId
-   * @returns {Promise<{ roomId: string, messages: Array<{role:string,content:string,ts:string}>, meta: object }>}
-   */
   async load(roomId) {
     await this.ensureDir();
     const fp = this.filePath(roomId);
@@ -45,10 +38,6 @@ export class RoomMemory {
     }
   }
 
-  /**
-   * @param {string|number} roomId
-   * @param {{ messages?: Array, meta?: object }} data
-   */
   async save(roomId, data) {
     await this.ensureDir();
     const fp = this.filePath(roomId);
@@ -62,13 +51,6 @@ export class RoomMemory {
     return payload;
   }
 
-  /**
-   * Append a chat turn and persist.
-   * @param {string|number} roomId
-   * @param {'user'|'assistant'|'system'} role
-   * @param {string} content
-   * @param {object} [extraMeta]
-   */
   async append(roomId, role, content, extraMeta = {}) {
     const state = await this.load(roomId);
     state.messages.push({

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "karlancer": {
+      "command": "node",
+      "args": ["src/mcp/stdio-entry.js"],
+      "cwd": "/absolute/path/to/karlancer-telegram-agent",
+      "env": {
+        "KARLANCER_ACCESS_TOKEN": "",
+        "DB_PATH": "./data/agent.sqlite",
+        "STATE_DIR": "./state"
+      }
+    }
+  }
+}

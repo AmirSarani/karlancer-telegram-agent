@@ -1,0 +1,7 @@
+# Terminate TLS in front of MCP HTTP (bind agent to 127.0.0.1 only)
+mcp.example.com {
+  reverse_proxy 127.0.0.1:8787
+  header {
+    -Server
+  }
+}

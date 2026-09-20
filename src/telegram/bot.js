@@ -1,27 +1,24 @@
 import { Bot } from 'grammy';
 
 /**
- * Owner-only Telegram control plane (long polling via grammY).
- * Commands are stubs for MVP; wiring to agent/browser comes later.
+ * Owner-only Telegram control plane integrated with durable jobs / approvals.
  */
-
-/** @typedef {'running'|'paused'} AgentRuntimeState */
 
 /**
  * @param {object} opts
  * @param {string} opts.token
  * @param {number|null} opts.ownerChatId
- * @param {{ onStatus?: Function }} [opts.hooks]
+ * @param {{ queue?: object, onStatus?: Function }} [opts.hooks]
  */
 export function createBot({ token, ownerChatId, hooks = {} }) {
   const bot = new Bot(token);
+  const queue = hooks.queue || null;
 
-  /** @type {{ state: AgentRuntimeState, startedAt: string, lastCommandAt: string|null, pendingApprovals: number }} */
+  /** @type {{ state: 'running'|'paused', startedAt: string, lastCommandAt: string|null }} */
   const runtime = {
     state: 'running',
     startedAt: new Date().toISOString(),
     lastCommandAt: null,
-    pendingApprovals: 0,
   };
 
   function isOwner(ctx) {
@@ -44,6 +41,10 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     runtime.lastCommandAt = new Date().toISOString();
   }
 
+  function pendingCount() {
+    return queue ? queue.pendingApprovals().length : 0;
+  }
+
   bot.command('start', async (ctx) => {
     touch();
     const chatId = ctx.chat?.id;
@@ -55,15 +56,17 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     }
     await ctx.reply(
       [
-        'کارلنسر Agent آماده است.',
+        'کارلنسر Agent (API-first) آماده است.',
         '',
         'دستورات:',
         '/help — راهنما',
-        '/status — وضعیت',
-        '/pause — توقف موقت',
+        '/status — وضعیت + صف',
+        '/pause — توقف موقت worker claim',
         '/resume — ادامه',
-        '/approve — تأیید اقدام در انتظار',
-        '/reject — رد اقدام در انتظار',
+        '/approvals — لیست تأییدهای در انتظار',
+        '/approve — تأیید اولین/شناسه',
+        '/reject — رد',
+        '/scan — صف اسکن دعوت‌ها',
       ].join('\n')
     );
   });
@@ -73,15 +76,16 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     touch();
     await ctx.reply(
       [
-        'راهنمای کنترل Agent کارلنسر',
+        'راهنمای کنترل Agent کارلنسر (بدون Playwright)',
         '',
-        '/status — حالت فعلی (running/paused) و آمار ساده',
-        '/pause — Agent را pause می‌کند (اسکن/پاسخ خودکار متوقف)',
-        '/resume — از حالت pause خارج می‌شود',
-        '/approve — stub: تأیید draft/اقدام HITL',
-        '/reject — stub: رد draft/اقدام HITL',
+        '/status — running/paused + jobs',
+        '/pause|/resume — کنترل runtime',
+        '/approvals — pending HITL',
+        '/approve [approval_id] — تأیید',
+        '/reject [approval_id] — رد',
+        '/scan — enqueue rooms.scan',
         '',
-        'مرورگر Playwright و اتصال به karlancer.com در مراحل بعدی وصل می‌شود.',
+        'Mutationها فقط بعد از approval اجرا می‌شوند.',
       ].join('\n')
     );
   });
@@ -93,15 +97,21 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       `state: ${runtime.state}`,
       `startedAt: ${runtime.startedAt}`,
       `lastCommandAt: ${runtime.lastCommandAt || '—'}`,
-      `pendingApprovals: ${runtime.pendingApprovals}`,
+      `pendingApprovals: ${pendingCount()}`,
       `ownerChatId: ${ownerChatId}`,
     ];
+    if (queue) {
+      const queued = queue.list({ status: 'queued', limit: 20 }).length;
+      const running = queue.list({ status: 'running', limit: 20 }).length;
+      const waiting = queue.list({ status: 'waiting_for_approval', limit: 20 }).length;
+      lines.push(`jobs queued=${queued} running=${running} waiting_approval=${waiting}`);
+    }
     if (typeof hooks.onStatus === 'function') {
       try {
         const extra = await hooks.onStatus(runtime);
         if (extra) lines.push(String(extra));
       } catch {
-        /* ignore hook errors in MVP */
+        /* ignore */
       }
     }
     await ctx.reply(lines.join('\n'));
@@ -121,19 +131,78 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     await ctx.reply('Agent دوباره running است.');
   });
 
-  bot.command('approve', async (ctx) => {
+  bot.command('approvals', async (ctx) => {
     if (await denyIfNotOwner(ctx)) return;
     touch();
-    // Stub: later bind to pending HITL draft queue
-    if (runtime.pendingApprovals > 0) runtime.pendingApprovals -= 1;
-    await ctx.reply('approve دریافت شد (stub). صف HITL هنوز به Playwright وصل نیست.');
+    if (!queue) {
+      await ctx.reply('صف job وصل نیست.');
+      return;
+    }
+    const pending = queue.pendingApprovals();
+    if (!pending.length) {
+      await ctx.reply('تأییدی در انتظار نیست.');
+      return;
+    }
+    const lines = pending.slice(0, 10).map((a) => {
+      let payload = {};
+      try {
+        payload = JSON.parse(a.payload_json || '{}');
+      } catch {
+        /* ignore */
+      }
+      return `• ${a.approval_id.slice(0, 8)}… job=${a.job_id.slice(0, 8)}… action=${a.action} project=${payload.projectId || '—'}`;
+    });
+    await ctx.reply(['Pending approvals:', ...lines, '', 'Use /approve <id> or /reject <id>'].join('\n'));
   });
 
-  bot.command('reject', async (ctx) => {
+  async function decide(ctx, approve) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
-    if (runtime.pendingApprovals > 0) runtime.pendingApprovals -= 1;
-    await ctx.reply('reject دریافت شد (stub). صف HITL هنوز به Playwright وصل نیست.');
+    if (!queue) {
+      await ctx.reply('صف job وصل نیست.');
+      return;
+    }
+    const arg = ctx.match?.trim?.() || (ctx.message?.text || '').split(/\s+/).slice(1).join(' ').trim();
+    let approval = null;
+    const pending = queue.pendingApprovals();
+    if (arg) {
+      approval = pending.find((a) => a.approval_id === arg || a.approval_id.startsWith(arg));
+    } else {
+      approval = pending[0];
+    }
+    if (!approval) {
+      await ctx.reply('approval پیدا نشد. /approvals را ببینید.');
+      return;
+    }
+    const result = queue.decideApproval(approval.approval_id, {
+      approve,
+      decidedBy: `telegram:${ctx.from?.id}`,
+    });
+    await ctx.reply(
+      `${approve ? 'approved' : 'rejected'}: ${approval.approval_id}\njob status → ${result?.job?.status}`
+    );
+  }
+
+  bot.command('approve', (ctx) => decide(ctx, true));
+  bot.command('reject', (ctx) => decide(ctx, false));
+
+  bot.command('scan', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    if (!queue) {
+      await ctx.reply('صف job وصل نیست.');
+      return;
+    }
+    if (runtime.state === 'paused') {
+      await ctx.reply('Agent pause است — اول /resume');
+      return;
+    }
+    const job = queue.create({
+      goal: 'rooms.scan',
+      requestedBy: `telegram:${ctx.from?.id}`,
+      payload: { page: 1 },
+    });
+    await ctx.reply(`اسکن صف شد.\njob_id: ${job.jobId}`);
   });
 
   bot.catch((err) => {
@@ -143,9 +212,6 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
   return {
     bot,
     runtime,
-    /**
-     * Start long polling. Resolves when polling starts (grammY start is blocking).
-     */
     async start() {
       console.log('[telegram] starting long polling…');
       await bot.start({
