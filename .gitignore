@@ -26,3 +26,6 @@ data/*
 # Private verified mutation config (never commit)
 configs/verified-mutations.local.json
 data/backups/
+
+# Live scan dumps may contain guest names (public repo)
+state/LIVE_SCAN.json
