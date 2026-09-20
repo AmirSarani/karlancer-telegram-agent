@@ -127,32 +127,47 @@ export async function handleJob(ctx, job) {
 
       const matched = [];
       for (const room of list) {
-        const last = (room.lastMessage || '').toLowerCase();
-        if (!keywords.some((kw) => last.includes(String(kw).toLowerCase()))) continue;
-        const msgs = await api.messages.list(room.id, { page: 1 });
-        const invite = msgs.messages.find((m) => m.projectId) || msgs.messages[0];
-        if (!invite?.projectId) continue;
-        const bid = await api.bids.check([invite.projectId]);
-        if (bid.weBidFor(invite.projectId)) continue;
-        const project = await api.projects.get(invite.projectId);
-        matched.push({
-          roomId: room.id,
-          projectId: invite.projectId,
-          inviteText: invite.text,
-          project: project.project,
-        });
-        memoryAppend(db, {
-          kind: 'invite_seen',
-          refId: room.id,
-          content: invite.text || project.project?.title || room.id,
-          meta: { projectId: invite.projectId },
-        });
-        memoryAppend(db, {
-          kind: 'room_last_message',
-          refId: room.id,
-          content: room.lastMessage || '',
-          meta: { updatedAt: room.updatedAt },
-        });
+        try {
+          const last = (room.lastMessage || '').toLowerCase();
+          if (!keywords.some((kw) => last.includes(String(kw).toLowerCase()))) continue;
+          const msgs = await api.messages.list(room.id, { page: 1 });
+          const invite = msgs.messages.find((m) => m.projectId) || msgs.messages[0];
+          if (!invite?.projectId) continue;
+          const bid = await api.bids.check([invite.projectId]);
+          if (bid.weBidFor(invite.projectId)) continue;
+          let project = null;
+          try {
+            project = await api.projects.get(invite.projectId);
+          } catch (e) {
+            // Public project fetch may 400 for some ids — still keep invite candidate
+            logger.warn('rooms_scan_project_get_failed', {
+              roomId: room.id,
+              projectId: invite.projectId,
+              err: e.message,
+              code: e.code,
+            });
+          }
+          matched.push({
+            roomId: room.id,
+            projectId: invite.projectId,
+            inviteText: invite.text,
+            project: project?.project || null,
+          });
+          memoryAppend(db, {
+            kind: 'invite_seen',
+            refId: room.id,
+            content: invite.text || project?.project?.title || room.id,
+            meta: { projectId: invite.projectId },
+          });
+          memoryAppend(db, {
+            kind: 'room_last_message',
+            refId: room.id,
+            content: room.lastMessage || '',
+            meta: { updatedAt: room.updatedAt },
+          });
+        } catch (e) {
+          logger.warn('rooms_scan_room_failed', { roomId: room?.id, err: e.message, code: e.code });
+        }
       }
 
       const scannedAt = new Date().toISOString();

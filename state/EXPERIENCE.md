@@ -118,3 +118,9 @@ Extra fields beyond list view: `user_id`, `rate` / `rate_num` / `rate_sum`, `ava
 ### Lesson
 
 **Events ≠ owner UX.** Worker/handoff projections are not enough — every owner-visible job completion that matters for triage must call `notifyOwner` once with a redacted Persian card. Keep deploy SHA current or Telegram UX and API work diverge silently.
+
+### Follow-up (same day): rooms.scan HTTP 400
+
+- Root: `api.projects.get(projectId)` returns **HTTP 400** for many invite project ids (list/messages/bids OK).
+- Effect: uncaught throw aborted entire `rooms.scan` before `rooms.scanned` → no Telegram card.
+- Fix: per-room try/catch; soft-fail `projects.get` and still emit summary + notify.
