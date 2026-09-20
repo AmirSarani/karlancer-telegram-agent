@@ -22,8 +22,9 @@ function optional(name, fallback = '') {
  * @param {{ requireTelegram?: boolean, requireOwner?: boolean }} [opts]
  */
 export function loadAppConfig(opts = {}) {
-  const requireTelegram = opts.requireTelegram !== false;
-  const requireOwner = opts.requireOwner !== false;
+  const enableTelegram = optional('ENABLE_TELEGRAM', 'true').toLowerCase() !== 'false';
+  const requireTelegram = opts.requireTelegram !== false && enableTelegram;
+  const requireOwner = opts.requireOwner !== false && enableTelegram;
 
   const telegramBotToken = requireTelegram
     ? required('TELEGRAM_BOT_TOKEN', process.env.TELEGRAM_BOT_TOKEN)
@@ -44,6 +45,7 @@ export function loadAppConfig(opts = {}) {
     openaiApiKey: optional('OPENAI_API_KEY'),
     openaiBaseUrl: optional('OPENAI_BASE_URL', 'https://api.openai.com/v1').replace(/\/$/, ''),
     openaiModel: optional('OPENAI_MODEL', 'gpt-4o-mini'),
+    openaiLargeModel: optional('OPENAI_LARGE_MODEL', optional('OPENAI_MODEL', 'gpt-4o-mini')),
     karlancerBaseUrl: optional('KARLANCER_BASE_URL', 'https://www.karlancer.com').replace(/\/$/, ''),
     karlancerAccessToken: optional('KARLANCER_ACCESS_TOKEN'),
     karlancerCookie: optional('KARLANCER_COOKIE'),
@@ -54,7 +56,7 @@ export function loadAppConfig(opts = {}) {
     mcpHttpHost: optional('MCP_HTTP_HOST', '127.0.0.1'),
     mcpHttpPort: Number(optional('MCP_HTTP_PORT', '8787')) || 8787,
     mcpApiKey: optional('MCP_API_KEY'),
-    enableTelegram: optional('ENABLE_TELEGRAM', 'true').toLowerCase() !== 'false',
+    enableTelegram,
     enableWorker: optional('ENABLE_WORKER', 'true').toLowerCase() !== 'false',
     dailyTokenLimit: Number(optional('DAILY_TOKEN_LIMIT', '200000')) || 200000,
   };

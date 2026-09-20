@@ -25,10 +25,13 @@ CREATE TABLE IF NOT EXISTS jobs (
   requires_approval INTEGER NOT NULL DEFAULT 0,
   idempotency_key TEXT,
   payload_json TEXT,
-  result_json TEXT
+  result_json TEXT,
+  next_at TEXT,
+  operation_id TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idem ON jobs(tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_next ON jobs(status, next_at);
 
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
@@ -47,6 +50,12 @@ CREATE TABLE IF NOT EXISTS approvals (
   action TEXT NOT NULL,
   status TEXT NOT NULL,
   payload_json TEXT,
+  payload_hash TEXT,
+  plan_version TEXT,
+  tenant_id TEXT DEFAULT 'default',
+  actor TEXT,
+  target_ref TEXT,
+  expires_at TEXT,
   created_at TEXT NOT NULL,
   decided_at TEXT,
   decided_by TEXT
@@ -85,6 +94,18 @@ CREATE TABLE IF NOT EXISTS token_usage (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_token_day ON token_usage(tenant_id, day);
 
+CREATE TABLE IF NOT EXISTS token_usage_events (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  job_id TEXT,
+  model TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS handoff_meta (
   key TEXT PRIMARY KEY,
   version INTEGER NOT NULL DEFAULT 1,
@@ -97,15 +118,112 @@ CREATE TABLE IF NOT EXISTS kv (
   value TEXT,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS schedules (
+  schedule_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  name TEXT NOT NULL,
+  capability TEXT NOT NULL,
+  cron_hint TEXT,
+  interval_ms INTEGER NOT NULL,
+  payload_json TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  paused INTEGER NOT NULL DEFAULT 0,
+  next_run_at TEXT,
+  last_run_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mcp_sessions (
+  session_id TEXT PRIMARY KEY,
+  api_key_hash TEXT NOT NULL,
+  scopes_json TEXT,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS intelligence_feedback (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  recommendation_id TEXT,
+  rules_version TEXT,
+  features_json TEXT,
+  output_json TEXT,
+  human_decision TEXT,
+  actual_outcome TEXT,
+  feedback TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS single_node_lock (
+  lock_name TEXT PRIMARY KEY,
+  holder TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL
+);
 `;
+
+const MIGRATIONS = [
+  `ALTER TABLE jobs ADD COLUMN next_at TEXT`,
+  `ALTER TABLE jobs ADD COLUMN operation_id TEXT`,
+  `ALTER TABLE approvals ADD COLUMN payload_hash TEXT`,
+  `ALTER TABLE approvals ADD COLUMN plan_version TEXT`,
+  `ALTER TABLE approvals ADD COLUMN tenant_id TEXT DEFAULT 'default'`,
+  `ALTER TABLE approvals ADD COLUMN actor TEXT`,
+  `ALTER TABLE approvals ADD COLUMN target_ref TEXT`,
+  `ALTER TABLE approvals ADD COLUMN expires_at TEXT`,
+];
 
 export function openDb(dbPath) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA);
+  for (const sql of MIGRATIONS) {
+    try {
+      db.exec(sql);
+    } catch {
+      /* column may already exist */
+    }
+  }
   return db;
+}
+
+/**
+ * Enforce single-node SQLite usage — second process gets conflict.
+ */
+export function acquireSingleNodeLock(db, holder, lockName = 'sqlite_primary') {
+  const now = new Date().toISOString();
+  const existing = db.prepare(`SELECT * FROM single_node_lock WHERE lock_name = ?`).get(lockName);
+  if (existing && existing.holder !== holder) {
+    const hb = Date.parse(existing.heartbeat_at || existing.acquired_at);
+    // stale lock > 2 minutes → reclaim
+    if (Number.isFinite(hb) && Date.now() - hb < 120_000) {
+      const err = new Error('single_node_lock_held');
+      err.code = 'single_node_lock_held';
+      err.holder = existing.holder;
+      throw err;
+    }
+  }
+  db.prepare(
+    `INSERT INTO single_node_lock (lock_name, holder, acquired_at, heartbeat_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(lock_name) DO UPDATE SET holder = excluded.holder, acquired_at = excluded.acquired_at, heartbeat_at = excluded.heartbeat_at`
+  ).run(lockName, holder, now, now);
+  return {
+    heartbeat() {
+      db.prepare(`UPDATE single_node_lock SET heartbeat_at = ? WHERE lock_name = ? AND holder = ?`).run(
+        new Date().toISOString(),
+        lockName,
+        holder
+      );
+    },
+    release() {
+      db.prepare(`DELETE FROM single_node_lock WHERE lock_name = ? AND holder = ?`).run(lockName, holder);
+    },
+  };
 }
 
 export default openDb;
