@@ -71,3 +71,27 @@ Operational learnings. **No secrets.** Append dated sections; do not erase histo
 ### API / UX / deploy notes
 ### Follow-ups
 ```
+
+---
+
+## 2026-09-20 — messages-pg + project resolve (live sample)
+
+### messages-pg envelope
+
+- `data` keys include: `room`, `room_unread`, `messages`, `has_reply`, `has_worksample`, `is_required_fulltime`, workdiary fields, `error_message`.
+- `data.messages` is a **Laravel paginator object** (not a bare array): `current_page`, `total`, `last_page`, `per_page`, `data[]`, URL fields.
+- Adapter already prefers `data.messages.data[]` via `extractMessageList`.
+
+### room object (nested in messages response)
+
+Extra fields beyond list view: `user_id`, `rate` / `rate_num` / `rate_sum`, `avatar`, `is_locked` / `am_locked`, `is_online`, `is_hidden`, quiz fields, `opening_trigger`. **`active_plan_id` is a plan id, not a Karlancer project id.**
+
+### Project fetch
+
+- Prefer project **slug** parsed from message HTML (`/projects/{slug}`) → `GET /api/publics/projects/{urlencoded-slug}`.
+- Public project object includes: `id`, `title`, `description`, budgets, flags (`is_urgent`, `is_fulltime`, `is_expired`, …), `status`, `url`, etc.
+
+### Follow-ups
+
+- Map `guest_name` → adapter `title` if UX needs it.
+- Owner `/scan` for continuous page-1 invite triage; deeper pagination still manual/successor work.

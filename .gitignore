@@ -29,3 +29,7 @@ data/backups/
 
 # Live scan dumps may contain guest names (public repo)
 state/LIVE_SCAN.json
+state/MSG_SHAPE_*.json
+state/PROJECT_SAMPLE.json
+state/ROOM_*_MESSAGES.json
+state/*.local.json
