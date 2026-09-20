@@ -12,6 +12,8 @@ import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
 import { notifyOwner } from './telegram/notify.js';
 import { formatScanSummary, afterScanInlineKeyboard } from './telegram/ui.js';
+import { formatRoomCard, roomCardKeyboard } from './telegram/room-card.js';
+import { createRoomState } from './agent/room-state.js';
 
 async function main() {
   // MCP-only / headless: ENABLE_TELEGRAM=false must not require Telegram token
@@ -96,6 +98,36 @@ async function main() {
     }
   }
 
+  /** Notify owner with full room cards for new inbound messages. */
+  const notifiedMsgIds = new Set();
+  async function notifyRoomCards(payload) {
+    if (!config.enableTelegram || !config.telegramBotToken || config.telegramOwnerChatId == null) {
+      return;
+    }
+    const cards = Array.isArray(payload?.cards) ? payload.cards : [];
+    for (const card of cards) {
+      const key = `${card.roomId}:${(card.freshInboundIds || []).join(',') || card.updatedAt || ''}`;
+      if (notifiedMsgIds.has(key)) continue;
+      notifiedMsgIds.add(key);
+      if (notifiedMsgIds.size > 500) {
+        const first = notifiedMsgIds.values().next().value;
+        notifiedMsgIds.delete(first);
+      }
+      const text = formatRoomCard({ ...card, sendApiLive: Boolean(card.sendApiLive) });
+      const res = await notifyOwner({
+        token: config.telegramBotToken,
+        chatId: config.telegramOwnerChatId,
+        text,
+        reply_markup: roomCardKeyboard(card.roomId),
+      });
+      if (!res.ok) {
+        logger.warn('telegram_room_card_notify_failed', { roomId: card.roomId, error: res.error });
+      } else {
+        logger.info('telegram_room_card_notified', { roomId: card.roomId, fresh: card.freshInboundCount });
+      }
+    }
+  }
+
   const worker = createWorker({
     db,
     queue,
@@ -119,6 +151,9 @@ async function main() {
       if (type === 'rooms.scanned' && payload) {
         await notifyScanIfNeeded(payload);
       }
+      if (type === 'messages.polled' && payload) {
+        await notifyRoomCards(payload);
+      }
     },
   });
 
@@ -135,18 +170,27 @@ async function main() {
       ownerChatId: config.telegramOwnerChatId,
       hooks: {
         queue,
+        db,
+        api,
+        llm,
         onStatus: async () => {
           const h = buildHealth({ db, worker, startedAt });
           const last = readLastScan();
+          const roomState = createRoomState(db);
+          const poll = roomState.getPollHealth();
           return {
             db: h.db,
             worker: h.worker,
             karlancerAuth: Boolean(api.client.hasAuth),
             lastScanAt: last?.scannedAt || null,
             lastScanUnread: last?.unreadOnPage ?? null,
+            lastPollAt: poll?.polledAt || null,
+            pendingRooms: roomState.pendingCount(),
+            pollOk: typeof poll?.ok === 'boolean' ? poll.ok : null,
             extra: [
               `openai: ${config.openaiApiKey ? 'فعال' : 'بدون کلید'}`,
               'playwright: استفاده نمی‌شود',
+              `send_api: ${poll?.sendApiLive ? 'live' : 'blocked_by_missing_api'}`,
             ].join('\n'),
           };
         },

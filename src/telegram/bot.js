@@ -17,6 +17,7 @@ import {
   approvalTarget,
 } from './ui.js';
 import { redactString } from '../security/redaction.js';
+import { createRoomFlows } from './room-flows.js';
 
 /**
  * Owner-only Telegram control plane with reply + inline keyboards.
@@ -29,6 +30,9 @@ import { redactString } from '../security/redaction.js';
 export function createBot({ token, ownerChatId, hooks = {} }) {
   const bot = new Bot(token);
   const queue = hooks.queue || null;
+  const db = hooks.db || null;
+  const api = hooks.api || null;
+  const llm = hooks.llm || null;
 
   /** @type {{ state: 'running'|'paused', startedAt: string, lastCommandAt: string|null }} */
   const runtime = {
@@ -73,6 +77,11 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     return { reply_markup: mainMenuKeyboard(runtime.state) };
   }
 
+  const roomFlows =
+    db != null
+      ? createRoomFlows({ db, queue, api, llm, menuOpts })
+      : null;
+
   async function collectStatus() {
     const pending = pendingCount();
     let queued = 0;
@@ -104,6 +113,9 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       karlancerAuth: null,
       lastScanAt: null,
       lastScanUnread: null,
+      lastPollAt: null,
+      pendingRooms: roomFlows ? roomFlows.roomState.pendingCount() : null,
+      pollOk: null,
       db: null,
       worker: null,
       lastError,
@@ -117,6 +129,9 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
           if (typeof extra.karlancerAuth === 'boolean') card.karlancerAuth = extra.karlancerAuth;
           if (extra.lastScanAt) card.lastScanAt = String(extra.lastScanAt);
           if (extra.lastScanUnread != null) card.lastScanUnread = extra.lastScanUnread;
+          if (extra.lastPollAt) card.lastPollAt = String(extra.lastPollAt);
+          if (extra.pendingRooms != null) card.pendingRooms = extra.pendingRooms;
+          if (typeof extra.pollOk === 'boolean') card.pollOk = extra.pollOk;
           if (extra.db != null) card.db = String(extra.db);
           if (extra.worker != null) card.worker = String(extra.worker);
           if (extra.lastError) card.lastError = redactString(String(extra.lastError));
@@ -145,6 +160,15 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       } catch {
         /* ignore */
       }
+    }
+
+    if (roomFlows) {
+      const health = roomFlows.roomState.getPollHealth();
+      if (health) {
+        if (card.lastPollAt == null && health.polledAt) card.lastPollAt = health.polledAt;
+        if (card.pollOk == null && typeof health.ok === 'boolean') card.pollOk = health.ok;
+      }
+      if (card.pendingRooms == null) card.pendingRooms = roomFlows.roomState.pendingCount();
     }
 
     return card;
@@ -408,14 +432,52 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     await doScan(ctx);
   });
 
-  // —— Reply keyboard text map ——
-  bot.on('message:text', async (ctx, next) => {
-    const action = mapMenuText(ctx.message.text);
-    if (!action) return next();
+  bot.command('chats', async (ctx) => {
     if (await denyIfNotOwner(ctx)) return;
     touch();
+    if (!roomFlows) {
+      await ctx.reply('room flows در دسترس نیست (db).', menuOpts());
+      return;
+    }
+    await roomFlows.replyRoomsList(ctx, { unreadOnly: false });
+  });
+
+  bot.command('unread', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    if (!roomFlows) {
+      await ctx.reply('room flows در دسترس نیست (db).', menuOpts());
+      return;
+    }
+    await roomFlows.replyRoomsList(ctx, { unreadOnly: true });
+  });
+
+  bot.command('cancel', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    if (roomFlows) roomFlows.roomState.clearAwaitingNote(ctx.from?.id);
+    await ctx.reply('لغو شد.', menuOpts());
+  });
+
+  // —— Reply keyboard text map ——
+  bot.on('message:text', async (ctx, next) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    // Note flow takes priority over menu buttons when awaiting
+    if (roomFlows && (await roomFlows.maybeHandleAwaitingNote(ctx))) return;
+
+    const action = mapMenuText(ctx.message.text);
+    if (!action) return next();
     if (action === 'status') return replyStatus(ctx);
     if (action === 'approvals') return replyApprovals(ctx);
+    if (action === 'chats') {
+      if (!roomFlows) return ctx.reply('room flows در دسترس نیست.', menuOpts());
+      return roomFlows.replyRoomsList(ctx, { unreadOnly: false });
+    }
+    if (action === 'unread') {
+      if (!roomFlows) return ctx.reply('room flows در دسترس نیست.', menuOpts());
+      return roomFlows.replyRoomsList(ctx, { unreadOnly: true });
+    }
     if (action === 'scan') return doScan(ctx);
     if (action === 'pause') return doPause(ctx);
     if (action === 'resume') return doResume(ctx);
@@ -442,6 +504,64 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       await ctx.answerCallbackQuery();
       await replyApprovals(ctx, { edit: true });
       return;
+    }
+
+    if (parsed.type === 'goto_chats') {
+      await ctx.answerCallbackQuery();
+      if (!roomFlows) {
+        await ctx.reply('room flows در دسترس نیست.', menuOpts());
+        return;
+      }
+      await roomFlows.replyRoomsList(ctx, { unreadOnly: false });
+      return;
+    }
+
+    if (parsed.type === 'goto_unread') {
+      await ctx.answerCallbackQuery();
+      if (!roomFlows) {
+        await ctx.reply('room flows در دسترس نیست.', menuOpts());
+        return;
+      }
+      await roomFlows.replyRoomsList(ctx, { unreadOnly: true });
+      return;
+    }
+
+    if (parsed.type?.startsWith('room_')) {
+      if (!roomFlows) {
+        await ctx.answerCallbackQuery({ text: 'db نیست', show_alert: true });
+        return;
+      }
+      const rid = parsed.roomId;
+      if (parsed.type === 'room_open') {
+        await ctx.answerCallbackQuery({ text: 'باز کردن…' });
+        await roomFlows.replyRoomCard(ctx, rid);
+        return;
+      }
+      if (parsed.type === 'room_approve') {
+        await ctx.answerCallbackQuery({ text: 'تأیید…' });
+        await roomFlows.approveSend(ctx, rid);
+        return;
+      }
+      if (parsed.type === 'room_reject') {
+        await ctx.answerCallbackQuery({ text: 'رد شد' });
+        await roomFlows.rejectRoom(ctx, rid);
+        return;
+      }
+      if (parsed.type === 'room_note') {
+        await ctx.answerCallbackQuery();
+        await roomFlows.startNoteFlow(ctx, rid);
+        return;
+      }
+      if (parsed.type === 'room_refresh') {
+        await ctx.answerCallbackQuery({ text: 'تازه‌سازی…' });
+        await roomFlows.replyRoomCard(ctx, rid, { edit: true });
+        return;
+      }
+      if (parsed.type === 'room_ai') {
+        await ctx.answerCallbackQuery({ text: 'تحلیل…' });
+        await roomFlows.runAiAnalyze(ctx, rid);
+        return;
+      }
     }
 
     if (parsed.type === 'approve' || parsed.type === 'reject') {

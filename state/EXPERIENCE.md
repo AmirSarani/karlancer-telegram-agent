@@ -124,3 +124,26 @@ Extra fields beyond list view: `user_id`, `rate` / `rate_num` / `rate_sum`, `ava
 - Root: `api.projects.get(projectId)` returns **HTTP 400** for many invite project ids (list/messages/bids OK).
 - Effect: uncaught throw aborted entire `rooms.scan` before `rooms.scanned` → no Telegram card.
 - Fix: per-room try/catch; soft-fail `projects.get` and still emit summary + notify.
+
+---
+
+## 2026-09-20 — Karlancer→Telegram per-chat control pipeline
+
+### What we built
+
+- `messages.poll` scheduler job (2 min): page-1 rooms, unread-first, fetch `messages-pg`, normalize (HTML strip / project slug / attachments), sqlite cursor + seen-id dedupe, deterministic draft via `draft-api.js`.
+- Telegram UX: reply buttons **چت‌ها** / **خوانده‌نشده**; room card with ✅ تأیید ارسال · ❌ رد · 📝 نوت · 🔄 تازه‌سازی · 🤖 تحلیل AI.
+- Approve → `messages.send` job + HITL approval row then decide; worker uses **VerifiedMutationContract only**. If contract missing → honest `blocked_by_missing_api` + `needs_reconciliation` (never fake send).
+- Note / AI: `analyze-llm.js` only; send path stays API automation.
+- Notify owner on each new inbound card (in addition to scan summary).
+
+### Constraints confirmed
+
+- No Playwright; no guessed POST endpoints.
+- Secrets redacted in Telegram bodies (`redactString`).
+- Owner-only bot gates unchanged.
+
+### Follow-ups
+
+- Capture authenticated HAR for chat POST → register `messages.send` VerifiedMutationContract.
+- Deeper pagination beyond page 1 if needed.

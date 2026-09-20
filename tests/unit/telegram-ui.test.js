@@ -24,7 +24,7 @@ test('main menu keyboard has Persian labels and is persistent/resized', () => {
   assert.equal(kb.resize_keyboard, true);
   assert.equal(kb.is_persistent, true);
   const flat = kb.keyboard.flat().map((b) => b.text);
-  assert.deepEqual(flat, [BTN.STATUS, BTN.APPROVALS, BTN.SCAN, BTN.PAUSE, BTN.HELP]);
+  assert.deepEqual(flat, [BTN.STATUS, BTN.APPROVALS, BTN.CHATS, BTN.UNREAD, BTN.SCAN, BTN.PAUSE, BTN.HELP]);
 
   const paused = mainMenuKeyboard('paused');
   const flatP = paused.keyboard.flat().map((b) => b.text);
@@ -57,6 +57,8 @@ test('afterScan inline has status callback', () => {
   const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(data.includes('refresh:status'));
   assert.ok(data.includes('goto:approvals'));
+  assert.ok(data.includes('goto:chats'));
+  assert.ok(data.includes('goto:unread'));
 });
 
 test('parseCallbackData covers approve/reject/refresh/goto', () => {
@@ -65,6 +67,8 @@ test('parseCallbackData covers approve/reject/refresh/goto', () => {
   assert.deepEqual(parseCallbackData(`no:${id}`), { type: 'reject', approvalId: id });
   assert.deepEqual(parseCallbackData('refresh:status'), { type: 'refresh_status' });
   assert.deepEqual(parseCallbackData('goto:approvals'), { type: 'goto_approvals' });
+  assert.deepEqual(parseCallbackData('goto:chats'), { type: 'goto_chats' });
+  assert.deepEqual(parseCallbackData('room:open:7241431'), { type: 'room_open', roomId: '7241431' });
   assert.equal(parseCallbackData('evil:payload'), null);
   assert.equal(parseCallbackData(''), null);
   assert.equal(parseCallbackData(null), null);
@@ -73,6 +77,8 @@ test('parseCallbackData covers approve/reject/refresh/goto', () => {
 test('mapMenuText maps reply labels', () => {
   assert.equal(mapMenuText(BTN.STATUS), 'status');
   assert.equal(mapMenuText(BTN.APPROVALS), 'approvals');
+  assert.equal(mapMenuText(BTN.CHATS), 'chats');
+  assert.equal(mapMenuText(BTN.UNREAD), 'unread');
   assert.equal(mapMenuText(BTN.SCAN), 'scan');
   assert.equal(mapMenuText(BTN.PAUSE), 'pause');
   assert.equal(mapMenuText(BTN.RESUME), 'resume');

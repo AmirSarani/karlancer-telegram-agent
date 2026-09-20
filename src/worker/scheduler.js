@@ -6,6 +6,7 @@ import { logger } from '../observability/logger.js';
 
 const DEFAULTS = [
   { name: 'rooms_scan', capability: 'rooms.scan', intervalMs: 5 * 60_000, payload: { page: 1 } },
+  { name: 'messages_poll', capability: 'messages.poll', intervalMs: 2 * 60_000, payload: { page: 1 } },
   { name: 'health_refresh', capability: 'health.ping', intervalMs: 60_000, payload: {} },
   { name: 'reconcile_poll', capability: 'health.ping', intervalMs: 120_000, payload: { note: 'reconcile_tick' } },
 ];

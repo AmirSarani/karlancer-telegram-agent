@@ -8,6 +8,7 @@ import {
   getVerifiedMutation,
   messageIdempotencyKey,
 } from '../contracts/verified-mutation.js';
+import { normalizeInboundMessage } from '../../agent/message-normalize.js';
 
 export function extractMessageList(apiJson) {
   if (!apiJson) return [];
@@ -26,31 +27,20 @@ export function extractMessageList(apiJson) {
   return [];
 }
 
+/** @deprecated prefer normalizeInboundMessage — kept for existing imports/tests */
 export function normalizeMessage(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const id = raw.id ?? raw.message_id ?? raw.uuid ?? null;
-  const text = String(
-    raw.message ?? raw.text ?? raw.body ?? raw.content ?? raw.last_message ?? ''
-  ).trim();
-  let isOwn = null;
-  if (typeof raw.is_me === 'boolean') isOwn = raw.is_me;
-  else if (typeof raw.is_mine === 'boolean') isOwn = raw.is_mine;
-  else if (typeof raw.from_me === 'boolean') isOwn = raw.from_me;
-
+  const m = normalizeInboundMessage(raw);
+  if (!m) return null;
   return {
-    id: id != null ? String(id) : null,
-    text,
-    createdAt: raw.created_at || raw.createdAt || raw.date || null,
-    projectId:
-      raw.project_id != null
-        ? String(raw.project_id)
-        : raw.projectId != null
-          ? String(raw.projectId)
-          : null,
-    userId:
-      raw.user_id != null ? String(raw.user_id) : raw.userId != null ? String(raw.userId) : null,
-    isOwn,
-    raw,
+    id: m.id,
+    text: m.text,
+    createdAt: m.createdAt,
+    projectId: m.projectId,
+    userId: m.userId,
+    isOwn: m.isOwn,
+    projectSlug: m.projectSlug,
+    attachments: m.attachments,
+    raw: m.raw,
   };
 }
 
@@ -85,6 +75,30 @@ export function getSendApiCandidates(roomId, text) {
   return candidates;
 }
 
+function extractRoomMeta(apiJson) {
+  const data = apiJson?.data || apiJson || {};
+  const room = data.room || null;
+  return {
+    room: room
+      ? {
+          id: room.id != null ? String(room.id) : null,
+          guestName: room.guest_name || room.guestName || null,
+          unread: data.room_unread ?? room.unread ?? null,
+          updatedAt: room.updated_at || room.updatedAt || null,
+          lastMessage: room.last_message || null,
+          isOpen: room.is_open,
+          isOnline: room.is_online,
+          userId: room.user_id != null ? String(room.user_id) : null,
+          raw: room,
+        }
+      : null,
+    roomUnread: data.room_unread ?? null,
+    hasReply: data.has_reply ?? null,
+    hasWorksample: data.has_worksample ?? null,
+    isRequiredFulltime: data.is_required_fulltime ?? null,
+  };
+}
+
 export function createMessagesAdapter(client) {
   return {
     async list(roomId, { page = 1 } = {}) {
@@ -98,11 +112,17 @@ export function createMessagesAdapter(client) {
         perPage: nested.per_page ?? null,
         total: nested.total ?? rawList.length,
       };
+      const meta = extractRoomMeta(res.data);
       return {
         roomId: String(roomId),
         page: Number(page) || 1,
         messages: rawList.map(normalizeMessage).filter(Boolean),
         pagination,
+        roomMeta: meta.room,
+        roomUnread: meta.roomUnread,
+        hasReply: meta.hasReply,
+        hasWorksample: meta.hasWorksample,
+        isRequiredFulltime: meta.isRequiredFulltime,
         raw: res.data,
       };
     },
@@ -131,8 +151,9 @@ export function createMessagesAdapter(client) {
           operationId: opId,
           roomId: String(roomId),
           hint: 'Capture authenticated HAR with 2xx message POST; register VerifiedMutationContract. See docs/HAR_CAPTURE.md',
-          // Expose candidate paths for operator HAR guidance only — not attempted
-          candidatePathsForHarOnly: getSendApiCandidates(roomId, text).map((c) => c.path).filter((v, i, a) => a.indexOf(v) === i),
+          candidatePathsForHarOnly: getSendApiCandidates(roomId, text)
+            .map((c) => c.path)
+            .filter((v, i, a) => a.indexOf(v) === i),
         };
       }
 

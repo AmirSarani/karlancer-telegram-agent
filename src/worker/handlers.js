@@ -5,6 +5,8 @@ import crypto from 'node:crypto';
 import { logger } from '../observability/logger.js';
 import { memoryAppend } from '../memory/store.js';
 import { bidIdempotencyKey } from '../api/contracts/verified-mutation.js';
+import { createRoomState } from '../agent/room-state.js';
+import { runMessagesPoll } from '../agent/messages-poll.js';
 
 /**
  * @param {object} ctx
@@ -192,6 +194,26 @@ export async function handleJob(ctx, job) {
       }
       await emit(ctx, 'rooms.scanned', summary);
       return { ok: true, result: { ...summary, matched } };
+    }
+
+
+    case 'messages.poll': {
+      const roomState = createRoomState(db);
+      const out = await runMessagesPoll({ api, db, roomState }, p);
+      if (!out.ok) {
+        return { ok: false, errorCode: out.errorCode, detail: out.detail };
+      }
+      await emit(ctx, 'messages.polled', {
+        polledAt: out.result.polledAt,
+        freshCount: out.result.freshCount,
+        newCards: out.result.newCards,
+        pendingDecisions: out.result.pendingDecisions,
+        unreadOnPage: out.result.unreadOnPage,
+        sendApiLive: out.result.sendApiLive,
+        cards: out.result.cards,
+        priorityUnread: out.result.priorityUnread,
+      });
+      return out;
     }
 
     case 'project.get': {

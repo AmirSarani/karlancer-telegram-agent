@@ -1,10 +1,13 @@
 import { Keyboard, InlineKeyboard } from 'grammy';
 import { redactString } from '../security/redaction.js';
+import { parseRoomCallback } from './room-card.js';
 
 /** Reply-keyboard button labels (exact match for hears / text map). */
 export const BTN = Object.freeze({
   STATUS: 'وضعیت',
   APPROVALS: 'تأییدها',
+  CHATS: 'چت‌ها',
+  UNREAD: 'خوانده‌نشده',
   SCAN: 'اسکن',
   PAUSE: 'مکث',
   RESUME: 'ادامه',
@@ -16,6 +19,8 @@ export const BOT_COMMANDS = [
   { command: 'start', description: 'منوی اصلی و شروع' },
   { command: 'status', description: 'وضعیت ایجنت و صف' },
   { command: 'approvals', description: 'تأییدهای در انتظار' },
+  { command: 'chats', description: 'لیست چت‌های کارلنسر' },
+  { command: 'unread', description: 'چت‌های خوانده‌نشده' },
   { command: 'scan', description: 'صف‌کردن اسکن دعوت‌ها' },
   { command: 'pause', description: 'توقف موقت worker' },
   { command: 'resume', description: 'ادامه کار worker' },
@@ -33,6 +38,9 @@ export function mainMenuKeyboard(agentState = 'running') {
   return new Keyboard()
     .text(BTN.STATUS)
     .text(BTN.APPROVALS)
+    .row()
+    .text(BTN.CHATS)
+    .text(BTN.UNREAD)
     .row()
     .text(BTN.SCAN)
     .text(toggle)
@@ -63,6 +71,9 @@ export function statusInlineKeyboard({ pendingCount = 0 } = {}) {
 export function afterScanInlineKeyboard() {
   return new InlineKeyboard()
     .text('📋 تأییدها', 'goto:approvals')
+    .text('💬 چت‌ها', 'goto:chats')
+    .row()
+    .text('🔴 خوانده‌نشده', 'goto:unread')
     .text('📊 وضعیت', 'refresh:status');
 }
 
@@ -75,6 +86,10 @@ export function parseCallbackData(data) {
   if (typeof data !== 'string' || !data) return null;
   if (data === 'refresh:status') return { type: 'refresh_status' };
   if (data === 'goto:approvals') return { type: 'goto_approvals' };
+  if (data === 'goto:chats') return { type: 'goto_chats' };
+  if (data === 'goto:unread') return { type: 'goto_unread' };
+  const room = parseRoomCallback(data);
+  if (room) return room;
   const m = /^(ok|no):([0-9a-fA-F-]{8,36})$/.exec(data);
   if (m) {
     return { type: m[1] === 'ok' ? 'approve' : 'reject', approvalId: m[2] };
@@ -155,6 +170,10 @@ export function formatStatusCard(s = {}) {
   ];
   if (s.lastScanAt) lines.push(`• آخرین اسکن: ${formatAgeFa(s.lastScanAt)}`);
   if (s.lastScanUnread != null) lines.push(`• خوانده‌نشده آخرین اسکن: ${s.lastScanUnread}`);
+  if (s.lastPollAt) lines.push(`• آخرین poll پیام: ${formatAgeFa(s.lastPollAt)}`);
+  if (s.pendingRooms != null) lines.push(`• تصمیم‌های چت باز: ${s.pendingRooms}`);
+  if (s.pollOk === false) lines.push('• سلامت poll: خطا');
+  else if (s.pollOk === true) lines.push('• سلامت poll: سالم');
   if (s.db) lines.push(`• دیتابیس: ${s.db}`);
   if (s.worker) lines.push(`• worker: ${s.worker}`);
   if (s.startedAt) lines.push(`• شروع: ${formatAgeFa(s.startedAt)}`);
@@ -227,7 +246,7 @@ export function formatWelcome(opts = {}) {
     '',
     'از منوی پایین استفاده کنید — نیازی به تایپ دستور نیست.',
     '',
-    'دکمه‌ها: وضعیت · تأییدها · اسکن · مکث/ادامه · راهنما'
+    'دکمه‌ها: وضعیت · تأییدها · چت‌ها · خوانده‌نشده · اسکن · مکث/ادامه · راهنما'
   );
   return lines.join('\n');
 }
@@ -239,6 +258,8 @@ export function formatHelp() {
     '🔹 دکمه‌های منو (پیشنهادی)',
     `• ${BTN.STATUS} — کارت وضعیت و صف`,
     `• ${BTN.APPROVALS} — لیست تأیید با دکمه‌های ✅/❌`,
+    `• ${BTN.CHATS} — لیست چت‌ها و کارت اتاق`,
+    `• ${BTN.UNREAD} — فقط خوانده‌نشده‌ها`,
     `• ${BTN.SCAN} — صف‌کردن اسکن دعوت‌ها`,
     `• ${BTN.PAUSE} / ${BTN.RESUME} — توقف یا ادامه worker`,
     `• ${BTN.HELP} — همین متن`,
@@ -274,6 +295,8 @@ export function mapMenuText(text) {
   const t = (text || '').trim();
   if (t === BTN.STATUS) return 'status';
   if (t === BTN.APPROVALS) return 'approvals';
+  if (t === BTN.CHATS) return 'chats';
+  if (t === BTN.UNREAD) return 'unread';
   if (t === BTN.SCAN) return 'scan';
   if (t === BTN.PAUSE) return 'pause';
   if (t === BTN.RESUME) return 'resume';
