@@ -1,34 +1,39 @@
-# Operations / RUNBOOK
+# OPERATIONS
 
-## Processes
-
-| Process | Command |
-|---------|---------|
-| Telegram + embedded worker | `npm start` |
-| Worker only | `npm run worker` |
-| MCP stdio | `npm run mcp` |
-| MCP HTTP | `npm run mcp:http` |
-
-## Health
-
-- `GET /health` on MCP HTTP port
-- Telegram `/status`
-
-## Backup
+## Local
 
 ```bash
-cp data/agent.sqlite data/agent.sqlite.bak-$(date +%Y%m%d)
+cp .env.example .env   # fill secrets locally — never commit
+npm ci
+ENABLE_TELEGRAM=false npm start   # worker/scheduler headless
+npm run worker                    # standalone worker
+npm run mcp                       # stdio
+npm run mcp:http                  # HTTP :8787
+npm test && npm run test:e2e && npm run guard:playwright
 ```
 
-Restore: stop processes, replace file, restart. Run `npm run test:e2e` after restore in staging.
+## Docker
 
-## Deploy
+```bash
+cd deploy && docker compose up -d --build
+# Telegram profile optional: docker compose --profile telegram up -d
+```
 
-See `deploy/docker-compose.yml` and `deploy/systemd/`.
+Single-node SQLite enforced via `single_node_lock` — do not scale multiple writers on one volume.
 
-## Incident
+## Backup / restore
 
-1. `/pause` on Telegram  
-2. Inspect `jobs` with status `failed` / `needs_reconciliation`  
-3. Rotate `KARLANCER_ACCESS_TOKEN` if 401  
-4. Never retry blind mutations — reconcile with `bids.check` first  
+```bash
+npm run backup
+bash deploy/scripts/restore-sqlite.sh data/backups/agent-XXXX.sqlite
+```
+
+## Token rotation
+
+Set `KARLANCER_ACCESS_TOKEN` in env/secret manager and restart worker **or** call `client.setAccessToken` via a future admin hook. Never paste token in Telegram chat.
+
+## Rollback
+
+1. `git checkout <previous-sha>`
+2. Restore SQLite backup
+3. Redeploy compose / systemd units in `deploy/`

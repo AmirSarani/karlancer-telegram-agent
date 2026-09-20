@@ -5,6 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createKarlancerApi } from '../../src/api/adapters/index.js';
 import { extractMessageList, normalizeMessage, getSendApiCandidates } from '../../src/api/adapters/messages.js';
+import {
+  registerVerifiedMutation,
+  clearVerifiedMutationsForTests,
+  BidPayloadSchema,
+} from '../../src/api/contracts/verified-mutation.js';
+import { z } from 'zod';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = path.join(__dirname, '../fixtures');
@@ -38,10 +44,11 @@ test('rooms.list normalizes fixture', async () => {
       return null;
     }),
   });
-  const { rooms } = await api.rooms.list({ page: 1 });
+  const { rooms, pagination } = await api.rooms.list({ page: 1 });
   assert.equal(rooms.length, 2);
   assert.equal(rooms[0].id, '101');
   assert.match(rooms[0].lastMessage, /دعوت/);
+  assert.ok(pagination);
 });
 
 test('messages.list extracts nested data', async () => {
@@ -88,18 +95,40 @@ test('projects public', async () => {
   assert.equal(p.project.title, 'نمونه پروژه');
 });
 
-test('send try-list marks blocked when all 404', async () => {
+test('messages.send without contract → blocked, NO POST', async () => {
+  clearVerifiedMutationsForTests();
+  let posts = 0;
   const api = createKarlancerApi({
     accessToken: 't',
-    fetchImpl: mockFetch(() => ({ status: 404, body: {} })),
+    fetchImpl: async (url, init) => {
+      if (init?.method === 'POST') posts += 1;
+      return { ok: false, status: 404, text: async () => '{}', headers: new Map() };
+    },
   });
   const r = await api.messages.send(1, 'hello');
   assert.equal(r.ok, false);
   assert.equal(r.status, 'blocked_by_missing_api');
-  assert.ok(r.attempts.length > 0);
+  assert.equal(r.posted, false);
+  assert.equal(posts, 0);
 });
 
-test('getSendApiCandidates matches extension', () => {
+test('bids.submit without contract → blocked, NO POST', async () => {
+  clearVerifiedMutationsForTests();
+  let posts = 0;
+  const api = createKarlancerApi({
+    accessToken: 't',
+    fetchImpl: async (url, init) => {
+      if (init?.method === 'POST') posts += 1;
+      return { ok: false, status: 404, text: async () => '{}', headers: new Map() };
+    },
+  });
+  const r = await api.bids.submit({ projectId: 1, proposalText: 'hello world proposal', price: 1e7, days: 7 });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 'blocked_by_missing_api');
+  assert.equal(posts, 0);
+});
+
+test('getSendApiCandidates matches extension (HAR guidance only)', () => {
   const c = getSendApiCandidates(12, 'hi');
   assert.ok(c.some((x) => x.path === '/api/rooms/12/messages'));
   assert.ok(c.some((x) => x.path === '/api/messages'));
@@ -108,4 +137,36 @@ test('getSendApiCandidates matches extension', () => {
 test('missing auth throws on protected route', async () => {
   const api = createKarlancerApi({ fetchImpl: mockFetch(() => ({ status: 200, body: {} })) });
   await assert.rejects(() => api.rooms.list(), /missing_auth|KARLANCER/);
+});
+
+test('tryPost forbidden without allowMutationDiscovery', async () => {
+  const api = createKarlancerApi({ accessToken: 't', fetchImpl: mockFetch(() => ({ status: 200, body: {} })) });
+  await assert.rejects(() => api.client.tryPost([{ path: '/api/x', body: {} }]), /tryPost blocked|VerifiedMutationContract/);
+});
+
+test('verified contract posts exactly once on success', async () => {
+  clearVerifiedMutationsForTests();
+  let posts = 0;
+  registerVerifiedMutation({
+    id: 'test-bid',
+    capability: 'bids.submit',
+    method: 'POST',
+    pathTemplate: '/api/bids',
+    payloadSchema: BidPayloadSchema,
+    expectedStatus: [200, 201],
+    responseSchema: z.any(),
+    evidence: 'unit-test',
+    contractVersion: 'test-1',
+  });
+  const api = createKarlancerApi({
+    accessToken: 't',
+    fetchImpl: async (url, init) => {
+      if (init?.method === 'POST') posts += 1;
+      return { ok: true, status: 200, text: async () => '{"ok":true}', headers: new Map() };
+    },
+  });
+  const r = await api.bids.submit({ projectId: 1, proposalText: 'hello world proposal', price: 1e7, days: 7 });
+  assert.equal(r.ok, true);
+  assert.equal(posts, 1);
+  clearVerifiedMutationsForTests();
 });

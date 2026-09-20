@@ -5,4 +5,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY . .
 ENV NODE_ENV=production
-CMD ["node", "src/index.js"]
+ENV ENABLE_TELEGRAM=false
+# Default: MCP HTTP; override command in compose for worker
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "process.exit(0)"
+CMD ["node", "src/mcp/http-entry.js"]

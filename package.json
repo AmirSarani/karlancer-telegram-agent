@@ -1,6 +1,6 @@
 {
   "name": "karlancer-telegram-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "API-first Karlancer agent: MCP + durable worker + Telegram HITL (no Playwright)",
   "type": "module",
   "private": true,
@@ -14,13 +14,16 @@
     "test:e2e": "node --test tests/e2e_api/*.test.js",
     "test:all": "npm test && npm run test:e2e && npm run guard:playwright",
     "guard:playwright": "node scripts/guard-no-playwright.js",
-    "handoff:project": "node scripts/project-handoff.js"
+    "handoff:project": "node scripts/project-handoff.js",
+    "migrate": "node --input-type=module -e \"import { openDb } from './src/memory/db.js'; openDb(process.env.DB_PATH||'./data/agent.sqlite'); console.log('migrated');\"",
+    "backup": "bash deploy/scripts/backup-sqlite.sh",
+    "lint": "node --check src/index.js && node --check src/worker/runner.js && node --check src/mcp/http-entry.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "1.12.1",
     "better-sqlite3": "^11.9.1",
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0",

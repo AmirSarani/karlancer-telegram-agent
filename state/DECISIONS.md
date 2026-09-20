@@ -1,7 +1,8 @@
 # DECISIONS
 
-## 2026-09-20 — Remove Playwright from production
+## 2026-09-20
 
-- Decision: HTTP adapters from extension contracts; quarantine Playwright stubs.
-- Alternatives: keep headed browser automation.
-- Effect: CI guard; bid/send may be blocked_by_missing_api until Network-confirmed.
+- Production bid/chat mutations only via VerifiedMutationContract; extension try-lists are documentation for HAR only.
+- ENABLE_TELEGRAM=false must allow MCP/worker without Telegram token.
+- MCP_ALLOW_ANON never grants admin.
+- Intelligence returns insufficient_data rather than fake ML confidence.
