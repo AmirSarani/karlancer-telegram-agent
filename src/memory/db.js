@@ -74,6 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory_items(tenant_id, kind, crea
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
   actor TEXT,
   action TEXT NOT NULL,
   tool TEXT,
@@ -165,6 +166,7 @@ CREATE TABLE IF NOT EXISTS single_node_lock (
 `;
 
 const MIGRATIONS = [
+  `ALTER TABLE audit_log ADD COLUMN tenant_id TEXT DEFAULT 'default'`,
   `ALTER TABLE jobs ADD COLUMN next_at TEXT`,
   `ALTER TABLE jobs ADD COLUMN operation_id TEXT`,
   `ALTER TABLE approvals ADD COLUMN payload_hash TEXT`,
@@ -195,13 +197,24 @@ export function openDb(dbPath) {
 /**
  * Enforce single-node SQLite usage — second process gets conflict.
  */
-export function acquireSingleNodeLock(db, holder, lockName = 'sqlite_primary') {
+/**
+ * Enforce single-writer SQLite usage.
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} holder
+ * @param {string} [lockName]
+ * @param {{ staleMs?: number, heartbeatMs?: number }} [opts]
+ *   staleMs default 120_000 — locks older than this may be reclaimed.
+ *   If startHeartbeat is used, interval is sooner than staleMs (default staleMs/3).
+ */
+export function acquireSingleNodeLock(db, holder, lockName = 'sqlite_primary', opts = {}) {
+  const staleMs = opts.staleMs ?? 120_000;
+  const heartbeatMs = opts.heartbeatMs ?? Math.min(30_000, Math.floor(staleMs / 3));
   const now = new Date().toISOString();
   const existing = db.prepare(`SELECT * FROM single_node_lock WHERE lock_name = ?`).get(lockName);
   if (existing && existing.holder !== holder) {
     const hb = Date.parse(existing.heartbeat_at || existing.acquired_at);
-    // stale lock > 2 minutes → reclaim
-    if (Number.isFinite(hb) && Date.now() - hb < 120_000) {
+    // live lock within staleMs → conflict
+    if (Number.isFinite(hb) && Date.now() - hb < staleMs) {
       const err = new Error('single_node_lock_held');
       err.code = 'single_node_lock_held';
       err.holder = existing.holder;
@@ -212,7 +225,11 @@ export function acquireSingleNodeLock(db, holder, lockName = 'sqlite_primary') {
     `INSERT INTO single_node_lock (lock_name, holder, acquired_at, heartbeat_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(lock_name) DO UPDATE SET holder = excluded.holder, acquired_at = excluded.acquired_at, heartbeat_at = excluded.heartbeat_at`
   ).run(lockName, holder, now, now);
-  return {
+
+  let timer = null;
+  const lock = {
+    staleMs,
+    heartbeatMs,
     heartbeat() {
       db.prepare(`UPDATE single_node_lock SET heartbeat_at = ? WHERE lock_name = ? AND holder = ?`).run(
         new Date().toISOString(),
@@ -220,10 +237,27 @@ export function acquireSingleNodeLock(db, holder, lockName = 'sqlite_primary') {
         holder
       );
     },
+    /** Start periodic heartbeat (sooner than stale timeout). Idempotent. */
+    startHeartbeat() {
+      if (timer) return;
+      timer = setInterval(() => {
+        try {
+          lock.heartbeat();
+        } catch {
+          /* ignore */
+        }
+      }, heartbeatMs);
+      if (typeof timer.unref === 'function') timer.unref();
+    },
     release() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
       db.prepare(`DELETE FROM single_node_lock WHERE lock_name = ? AND holder = ?`).run(lockName, holder);
     },
   };
+  return lock;
 }
 
 export default openDb;

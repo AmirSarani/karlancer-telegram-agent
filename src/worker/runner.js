@@ -140,6 +140,7 @@ if (isMain) {
   let nodeLock;
   try {
     nodeLock = acquireSingleNodeLock(db, `worker-${process.pid}`);
+    nodeLock.startHeartbeat();
   } catch (e) {
     logger.error('single_node_lock', { err: e.message, holder: e.holder });
     process.exit(1);

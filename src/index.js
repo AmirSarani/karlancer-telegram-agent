@@ -27,6 +27,7 @@ async function main() {
   let nodeLock;
   try {
     nodeLock = acquireSingleNodeLock(db, `main-${process.pid}`);
+    nodeLock.startHeartbeat();
   } catch (e) {
     logger.error('single_node_lock', { err: e.message });
     process.exit(1);

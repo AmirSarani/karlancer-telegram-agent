@@ -38,10 +38,11 @@ export function registerTools(server, ctx) {
     }
     try {
       db.prepare(
-        `INSERT INTO audit_log (id, actor, action, tool, input_hash, result_code, correlation_id, created_at, detail_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO audit_log (id, tenant_id, actor, action, tool, input_hash, result_code, correlation_id, created_at, detail_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         crypto.randomUUID(),
+        getTenantId(),
         'mcp',
         'tool_call',
         meta.name,
@@ -371,6 +372,10 @@ export function registerTools(server, ctx) {
     guard({ name: 'job.cancel', permission: 'write' }, async ({ jobId }) => {
       const job = queue.get(jobId);
       if (!job) return errResult('not_found', 'job not found');
+      const tenant = getTenantId();
+      if (tenant !== 'default' && job.tenantId !== tenant) {
+        return errResult('forbidden', 'tenant isolation');
+      }
       if (!['queued', 'waiting_for_approval', 'planning'].includes(job.status)) {
         return errResult('not_cancellable', `status=${job.status}`);
       }
@@ -482,6 +487,10 @@ export function registerTools(server, ctx) {
     guard({ name: 'approvals.get', permission: 'read' }, async ({ approvalId }) => {
       const a = queue.getApproval(approvalId);
       if (!a) return errResult('not_found', 'approval not found');
+      const tenant = getTenantId();
+      if (tenant !== 'default' && a.tenant_id !== tenant) {
+        return errResult('forbidden', 'tenant isolation');
+      }
       return textResult(a);
     })
   );
@@ -498,6 +507,12 @@ export function registerTools(server, ctx) {
       },
     },
     guard({ name: 'approvals.decide', permission: 'approve' }, async ({ approvalId, approve, decidedBy, expectedPayloadHash }) => {
+      const existing = queue.getApproval(approvalId);
+      if (!existing) return errResult('not_found', 'approval not found');
+      const tenant = getTenantId();
+      if (tenant !== 'default' && existing.tenant_id !== tenant) {
+        return errResult('forbidden', 'tenant isolation');
+      }
       const result = queue.decideApproval(approvalId, {
         approve,
         decidedBy: decidedBy || 'mcp',
@@ -518,11 +533,19 @@ export function registerTools(server, ctx) {
       annotations: { readOnlyHint: true },
     },
     guard({ name: 'audit.search', permission: 'read' }, async ({ limit }) => {
-      const rows = db
-        .prepare(
-          `SELECT id, actor, action, tool, result_code, correlation_id, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`
-        )
-        .all(limit || 50);
+      const tenant = getTenantId();
+      const rows =
+        tenant === 'default'
+          ? db
+              .prepare(
+                `SELECT id, tenant_id, actor, action, tool, result_code, correlation_id, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`
+              )
+              .all(limit || 50)
+          : db
+              .prepare(
+                `SELECT id, tenant_id, actor, action, tool, result_code, correlation_id, created_at FROM audit_log WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?`
+              )
+              .all(tenant, limit || 50);
       return textResult({ count: rows.length, rows });
     })
   );

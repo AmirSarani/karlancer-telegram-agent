@@ -21,7 +21,7 @@ export function registerResources(server, ctx) {
     }
   }
 
-  server.registerResource(
+  server.resource(
     'handoff',
     'karlancer://handoff',
     { description: 'Latest AGENT_HANDOFF.md projection', mimeType: 'text/markdown' },
@@ -36,7 +36,7 @@ export function registerResources(server, ctx) {
     })
   );
 
-  server.registerResource(
+  server.resource(
     'project-state',
     'karlancer://project-state',
     { description: 'PROJECT_STATE.md projection', mimeType: 'text/markdown' },
@@ -51,7 +51,7 @@ export function registerResources(server, ctx) {
     })
   );
 
-  server.registerResource(
+  server.resource(
     'api-audit',
     'karlancer://api-audit',
     { description: 'IMPLEMENTATION_AUDIT.md', mimeType: 'text/markdown' },
@@ -66,7 +66,7 @@ export function registerResources(server, ctx) {
     })
   );
 
-  server.registerResource(
+  server.resource(
     'api-catalog',
     'karlancer://api-catalog',
     { description: 'API catalog', mimeType: 'text/markdown' },

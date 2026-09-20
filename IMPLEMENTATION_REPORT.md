@@ -38,3 +38,11 @@ See `docs/OPERATIONS.md`, `docs/MCP_PRODUCTION.md`, `configs/cursor-mcp.json.exa
 2. Live Karlancer auth tests skipped without env token.  
 3. SQLite single-node only.  
 4. ChatGPT/Codex remote not claimed connected — protocol ready only.
+
+## Fix pass (P0/P1) — post b64ae69
+
+- MCP SDK 1.12.1: adapted to `resource()` / `prompt()` (register* were wrong for this pin).
+- Approval decide: hash from **job** payload; exact payload_json identity; atomic txn; `payload_tampered`.
+- Single-node lock heartbeat wired in index + worker; test proves live lock not stealable.
+- Multi-tenant: API key → tenantId; tools + `/jobs` scoped.
+- Clean verify: npm test 75/0, test:e2e 3/0/1 skip, guard:playwright OK, docker build OK.

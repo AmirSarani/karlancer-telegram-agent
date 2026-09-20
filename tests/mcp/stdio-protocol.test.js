@@ -1,6 +1,5 @@
 /**
- * MCP stdio protocol smoke: initialize via in-process transport if available,
- * otherwise verify createMcpServer + tool registration path.
+ * MCP stdio/in-memory protocol coverage.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,59 +13,85 @@ import { createJobQueue } from '../../src/worker/queue.js';
 import { createKarlancerApi } from '../../src/api/adapters/index.js';
 import { createMcpServer } from '../../src/mcp/create-server.js';
 
-test('MCP in-memory: initialize, tools/list, tools/call health.get', async () => {
+async function linkedClient(ctx) {
+  const server = createMcpServer(ctx);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test', version: '1.0.0' });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return { client, server };
+}
+
+test('MCP in-memory: initialize, tools/list, resources/list, resources/read, prompts/list, tools/call', async () => {
   const db = openDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'klr-')), 'stdio.sqlite'));
   const queue = createJobQueue(db);
   const api = createKarlancerApi({
     accessToken: 't',
     fetchImpl: async () => ({ ok: true, status: 200, text: async () => '{}' }),
   });
-  const server = createMcpServer({
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-'));
+  fs.writeFileSync(path.join(stateDir, 'AGENT_HANDOFF.md'), '# handoff ok\n');
+  const { client } = await linkedClient({
     db,
     queue,
     api,
-    stateDir: fs.mkdtempSync(path.join(os.tmpdir(), 'st-')),
+    stateDir,
     root: path.resolve('.'),
     startedAt: Date.now(),
     getScopes: () => ['admin'],
   });
 
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'test', version: '1.0.0' });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name);
   for (const required of [
     'health.get',
-    'project.get',
     'rooms.list',
+    'project.get',
     'room.messages',
     'bids.check',
-    'memory.search',
-    'job.get_status',
-    'pricing.get_recommendation',
-    'intelligence.get_insight',
     'bids.submit_plan',
     'messages.send_plan',
     'project.analyze_plan',
     'proposal.draft_plan',
+    'job.get_status',
+    'job.cancel',
+    'memory.search',
+    'pricing.get_recommendation',
     'approvals.list',
     'approvals.get',
     'approvals.decide',
-    'job.cancel',
+    'intelligence.get_insight',
   ]) {
-    assert.ok(names.includes(required), `missing tool ${required}`);
+    assert.ok(names.includes(required), `missing tool ${required}; have: ${names.join(',')}`);
   }
 
-  const result = await client.callTool({ name: 'health.get', arguments: { detailed: false } });
+  const resources = await client.listResources();
+  const uris = resources.resources.map((r) => r.uri);
+  assert.ok(uris.includes('karlancer://handoff'), `uris=${uris}`);
+  assert.ok(uris.includes('karlancer://project-state'), `uris=${uris}`);
+
+  const read = await client.readResource({ uri: 'karlancer://handoff' });
+  assert.ok(read.contents?.[0]?.text?.includes('handoff ok'));
+
+  const prompts = await client.listPrompts();
+  assert.ok(prompts.prompts.some((p) => p.name === 'karlancer_analyze'));
+
+  const result = await client.callTool({ name: 'health.get', arguments: {} });
   assert.ok(result.content?.[0]?.text);
   const body = JSON.parse(result.content[0].text);
   assert.ok(body.status || body.ts);
 
-  // insufficient scope
-  const server2 = createMcpServer({
+  await client.close();
+});
+
+test('MCP in-memory: insufficient scope denied on write tool', async () => {
+  const db = openDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'klr-')), 'stdio2.sqlite'));
+  const queue = createJobQueue(db);
+  const api = createKarlancerApi({
+    accessToken: 't',
+    fetchImpl: async () => ({ ok: true, status: 200, text: async () => '{}' }),
+  });
+  const { client } = await linkedClient({
     db,
     queue,
     api,
@@ -75,16 +100,10 @@ test('MCP in-memory: initialize, tools/list, tools/call health.get', async () =>
     startedAt: Date.now(),
     getScopes: () => ['read'],
   });
-  const [c2t, s2t] = InMemoryTransport.createLinkedPair();
-  const client2 = new Client({ name: 'test2', version: '1.0.0' });
-  await server2.connect(s2t);
-  await client2.connect(c2t);
-  const denied = await client2.callTool({
+  const denied = await client.callTool({
     name: 'bids.submit_plan',
     arguments: { projectId: 1, proposalText: 'hello world proposal', price: 1, days: 1 },
   });
   assert.equal(denied.isError, true);
-
   await client.close();
-  await client2.close();
 });

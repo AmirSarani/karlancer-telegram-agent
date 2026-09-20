@@ -356,68 +356,143 @@ export function createJobQueue(db) {
     /**
      * Atomic approval decide — only pending + matching payload_hash (if provided).
      */
+    /**
+     * Atomic approval decide.
+     * Integrity: hash is recomputed from the *job* payload (not approvals.payload_json alone).
+     * approvals.payload_json must be byte-identical to jobs.payload_json.
+     * On any mismatch → payload_tampered; job is NEVER queued.
+     * Approve/reject + job status change run in one SQLite transaction.
+     */
     decideApproval(approvalId, { approve, decidedBy, expectedPayloadHash = null }) {
-      const row = db.prepare(`SELECT * FROM approvals WHERE approval_id = ?`).get(approvalId);
-      if (!row) return null;
-      if (row.status !== 'pending') return { approval: row, job: this.get(row.job_id), alreadyDecided: true };
+      const run = db.transaction(() => {
+        const row = db.prepare(`SELECT * FROM approvals WHERE approval_id = ?`).get(approvalId);
+        if (!row) return null;
+        if (row.status !== 'pending') {
+          return { approval: row, job: this.get(row.job_id), alreadyDecided: true };
+        }
 
-      if (row.expires_at && Date.parse(row.expires_at) < Date.now()) {
-        db.prepare(`UPDATE approvals SET status = 'expired', decided_at = ?, decided_by = ? WHERE approval_id = ? AND status = 'pending'`).run(
-          new Date().toISOString(),
-          decidedBy,
-          approvalId
-        );
-        this.setStatus(row.job_id, 'cancelled', { errorCode: 'approval_expired' });
-        return { approval: db.prepare(`SELECT * FROM approvals WHERE approval_id = ?`).get(approvalId), job: this.get(row.job_id), expired: true };
-      }
+        if (row.expires_at && Date.parse(row.expires_at) < Date.now()) {
+          db.prepare(
+            `UPDATE approvals SET status = 'expired', decided_at = ?, decided_by = ? WHERE approval_id = ? AND status = 'pending'`
+          ).run(new Date().toISOString(), decidedBy, approvalId);
+          this.setStatus(row.job_id, 'cancelled', { errorCode: 'approval_expired' });
+          return {
+            approval: db.prepare(`SELECT * FROM approvals WHERE approval_id = ?`).get(approvalId),
+            job: this.get(row.job_id),
+            expired: true,
+          };
+        }
 
-      // Tamper check: recompute hash from stored payload vs stored hash; or expectedPayloadHash
-      const job = this.get(row.job_id);
-      if (row.payload_hash && job) {
+        const jobRow = db.prepare(`SELECT * FROM jobs WHERE job_id = ?`).get(row.job_id);
+        if (!jobRow) {
+          return { approval: row, job: null, tampered: true, error: 'payload_tampered', detail: 'missing_job' };
+        }
+
+        // Canonical identity: approvals.payload_json === jobs.payload_json (exact)
+        if (String(row.payload_json || '') !== String(jobRow.payload_json || '')) {
+          return {
+            approval: row,
+            job: this.get(row.job_id),
+            tampered: true,
+            error: 'payload_tampered',
+            detail: 'payload_json_mismatch',
+          };
+        }
+
+        let jobPayload;
+        try {
+          jobPayload = jobRow.payload_json ? JSON.parse(jobRow.payload_json) : {};
+        } catch {
+          return {
+            approval: row,
+            job: this.get(row.job_id),
+            tampered: true,
+            error: 'payload_tampered',
+            detail: 'job_payload_unparseable',
+          };
+        }
+
+        // Metadata must match job (detect tenant/action/planVersion/targetRef tampering)
+        const jobTenant = jobRow.tenant_id;
+        const jobAction = jobRow.goal;
+        const jobPlan = jobRow.plan_version || '1';
+        if (
+          (row.tenant_id || 'default') !== (jobTenant || 'default') ||
+          row.action !== jobAction ||
+          String(row.plan_version || '1') !== String(jobPlan)
+        ) {
+          return {
+            approval: row,
+            job: this.get(row.job_id),
+            tampered: true,
+            error: 'payload_tampered',
+            detail: 'metadata_mismatch',
+          };
+        }
+
         const recomputed = hashApprovalPayload({
-          tenantId: row.tenant_id || job.tenantId,
-          actor: row.actor || job.requestedBy,
-          action: row.action,
-          payload: row.payload_json ? JSON.parse(row.payload_json) : {},
-          planVersion: row.plan_version || job.planVersion,
+          tenantId: jobTenant,
+          actor: row.actor || jobRow.requested_by,
+          action: jobAction,
+          payload: jobPayload,
+          planVersion: jobPlan,
           targetRef: row.target_ref,
           createdAt: row.created_at,
           expiresAt: row.expires_at,
         });
-        if (recomputed !== row.payload_hash) {
-          return { approval: row, job, tampered: true, error: 'payload_hash_mismatch' };
+
+        if (row.payload_hash && recomputed !== row.payload_hash) {
+          return {
+            approval: row,
+            job: this.get(row.job_id),
+            tampered: true,
+            error: 'payload_tampered',
+            detail: 'payload_hash_mismatch',
+          };
         }
-      }
-      if (expectedPayloadHash && row.payload_hash && expectedPayloadHash !== row.payload_hash) {
-        return { approval: row, job, tampered: true, error: 'expected_hash_mismatch' };
-      }
+        if (expectedPayloadHash && row.payload_hash && expectedPayloadHash !== row.payload_hash) {
+          return {
+            approval: row,
+            job: this.get(row.job_id),
+            tampered: true,
+            error: 'payload_tampered',
+            detail: 'expected_hash_mismatch',
+          };
+        }
 
-      const nowIso = new Date().toISOString();
-      const status = approve ? 'approved' : 'rejected';
-      const info = db
-        .prepare(
-          `UPDATE approvals SET status = ?, decided_at = ?, decided_by = ? WHERE approval_id = ? AND status = 'pending'`
-        )
-        .run(status, nowIso, decidedBy, approvalId);
-      if (info.changes === 0) {
-        return { approval: db.prepare(`SELECT * FROM approvals WHERE approval_id = ?`).get(approvalId), job: this.get(row.job_id), alreadyDecided: true };
-      }
+        const nowIso = new Date().toISOString();
+        const status = approve ? 'approved' : 'rejected';
+        const info = db
+          .prepare(
+            `UPDATE approvals SET status = ?, decided_at = ?, decided_by = ? WHERE approval_id = ? AND status = 'pending'`
+          )
+          .run(status, nowIso, decidedBy, approvalId);
+        if (info.changes === 0) {
+          return {
+            approval: db.prepare(`SELECT * FROM approvals WHERE approval_id = ?`).get(approvalId),
+            job: this.get(row.job_id),
+            alreadyDecided: true,
+          };
+        }
 
-      if (approve) {
-        this.setStatus(row.job_id, 'queued');
-      } else {
-        this.setStatus(row.job_id, 'cancelled', { errorCode: 'rejected' });
-      }
-      appendEvent(db, {
-        jobId: row.job_id,
-        type: approve ? 'approval.granted' : 'approval.rejected',
-        actor: decidedBy,
-        payload: { approvalId },
+        if (approve) {
+          this.setStatus(row.job_id, 'queued');
+        } else {
+          this.setStatus(row.job_id, 'cancelled', { errorCode: 'rejected' });
+        }
+        appendEvent(db, {
+          jobId: row.job_id,
+          type: approve ? 'approval.granted' : 'approval.rejected',
+          actor: decidedBy,
+          payload: { approvalId },
+        });
+        return {
+          approval: db.prepare(`SELECT * FROM approvals WHERE approval_id = ?`).get(approvalId),
+          job: this.get(row.job_id),
+        };
       });
-      return {
-        approval: db.prepare(`SELECT * FROM approvals WHERE approval_id = ?`).get(approvalId),
-        job: this.get(row.job_id),
-      };
+
+      return run();
     },
 
     pendingApprovals(tenantId = null) {

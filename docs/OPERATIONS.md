@@ -19,7 +19,7 @@ cd deploy && docker compose up -d --build
 # Telegram profile optional: docker compose --profile telegram up -d
 ```
 
-Single-node SQLite enforced via `single_node_lock` — do not scale multiple writers on one volume.
+Single-node SQLite enforced via `acquireSingleNodeLock` with **periodic heartbeat** (default every ≤30s; stale reclaim at 2 min). Wire-up: `src/index.js` and `src/worker/runner.js` call `startHeartbeat()` after acquire and `release()` on shutdown. Do not run multiple writers on one volume.
 
 ## Backup / restore
 

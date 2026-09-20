@@ -68,7 +68,7 @@ function authOrReject(req, res, scope = 'read') {
       res.end(JSON.stringify({ error: 'anon_insufficient_scope' }));
       return null;
     }
-    return { ok: true, scopes: ['read'], label: 'anon', keyHash: 'anon' };
+    return { ok: true, scopes: ['read'], label: 'anon', keyHash: 'anon', tenantId: 'default' };
   }
   const result = authorizeApiKey(registry, getKey(req), scope);
   if (!result.ok) {
@@ -150,15 +150,18 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/jobs' && req.method === 'GET') {
-    if (!authOrReject(req, res, 'read')) return;
+    const auth = authOrReject(req, res, 'read');
+    if (!auth) return;
     const status = url.searchParams.get('status');
+    const tenantId = auth.tenantId || 'default';
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ jobs: queue.list({ status, limit: 50 }) }));
+    res.end(JSON.stringify({ jobs: queue.list({ status, limit: 50, tenantId }) }));
     return;
   }
 
   if (url.pathname.startsWith('/jobs/') && req.method === 'GET') {
-    if (!authOrReject(req, res, 'read')) return;
+    const auth = authOrReject(req, res, 'read');
+    if (!auth) return;
     const id = url.pathname.split('/')[2];
     if (!/^[0-9a-f-]{36}$/i.test(id || '')) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -166,8 +169,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const job = queue.get(id);
-    res.writeHead(job ? 200 : 404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(job || { error: 'not_found' }));
+    if (!job) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+    const tenantId = auth.tenantId || 'default';
+    if (tenantId !== 'default' && job.tenantId !== tenantId) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'forbidden', code: 'tenant_isolation' }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(job));
     return;
   }
 
@@ -230,6 +244,7 @@ const server = http.createServer(async (req, res) => {
             root: config.root,
             startedAt,
             getScopes: () => auth.scopes || ['read'],
+            getTenantId: () => auth.tenantId || 'default',
           });
           await mcp.connect(transport);
           await transport.handleRequest(req, res, body);

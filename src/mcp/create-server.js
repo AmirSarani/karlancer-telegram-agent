@@ -1,9 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import { registerTools } from './tools.js';
 import { registerResources } from './resources.js';
 
 /**
- * @param {object} ctx — db, queue, api, stateDir, root, worker?, getScopes?
+ * @param {object} ctx — db, queue, api, stateDir, root, worker?, getScopes?, getTenantId?
  */
 export function createMcpServer(ctx) {
   const server = new McpServer(
@@ -22,14 +23,11 @@ export function createMcpServer(ctx) {
   registerTools(server, ctx);
   registerResources(server, ctx);
 
-  server.registerPrompt(
+  // SDK 1.12.1 API is prompt(), not registerPrompt()
+  server.prompt(
     'karlancer_analyze',
-    {
-      description: 'Short prompt for analyzing a Karlancer project (no secrets).',
-      argsSchema: {
-        title: { type: 'string', description: 'Project title', required: false },
-      },
-    },
+    'Short prompt for analyzing a Karlancer project (no secrets).',
+    { title: z.string().optional().describe('Project title') },
     async ({ title }) => ({
       messages: [
         {
