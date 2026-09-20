@@ -10,6 +10,8 @@ import { buildHealth } from './observability/health.js';
 import { createScheduler } from './worker/scheduler.js';
 import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
+import { notifyOwner } from './telegram/notify.js';
+import { formatScanSummary, afterScanInlineKeyboard } from './telegram/ui.js';
 
 async function main() {
   // MCP-only / headless: ENABLE_TELEGRAM=false must not require Telegram token
@@ -60,6 +62,40 @@ async function main() {
   const memory = new RoomMemory(config.memoryDir);
   await memory.ensureDir();
 
+  function readLastScan() {
+    try {
+      const row = db.prepare(`SELECT value, updated_at FROM kv WHERE key = 'last_scan_summary'`).get();
+      if (!row?.value) return null;
+      const summary = JSON.parse(row.value);
+      return { ...summary, scannedAt: summary.scannedAt || row.updated_at };
+    } catch {
+      return null;
+    }
+  }
+
+  /** One Telegram notify per rooms.scan job (owner-only). */
+  let lastNotifiedScanAt = null;
+  async function notifyScanIfNeeded(summary) {
+    if (!config.enableTelegram || !config.telegramBotToken || config.telegramOwnerChatId == null) {
+      return;
+    }
+    if (!summary?.scannedAt) return;
+    if (lastNotifiedScanAt === summary.scannedAt) return;
+    lastNotifiedScanAt = summary.scannedAt;
+    const text = formatScanSummary(summary);
+    const res = await notifyOwner({
+      token: config.telegramBotToken,
+      chatId: config.telegramOwnerChatId,
+      text,
+      reply_markup: afterScanInlineKeyboard(),
+    });
+    if (!res.ok) {
+      logger.warn('telegram_scan_notify_failed', { error: res.error });
+    } else {
+      logger.info('telegram_scan_notified', { page: summary.page, unread: summary.unreadOnPage });
+    }
+  }
+
   const worker = createWorker({
     db,
     queue,
@@ -80,6 +116,9 @@ async function main() {
         inProgress: [type],
         capabilities: ['api-adapters', 'worker', 'sqlite', 'mcp', 'llm'],
       });
+      if (type === 'rooms.scanned' && payload) {
+        await notifyScanIfNeeded(payload);
+      }
     },
   });
 
@@ -98,10 +137,13 @@ async function main() {
         queue,
         onStatus: async () => {
           const h = buildHealth({ db, worker, startedAt });
+          const last = readLastScan();
           return {
             db: h.db,
             worker: h.worker,
             karlancerAuth: Boolean(api.client.hasAuth),
+            lastScanAt: last?.scannedAt || null,
+            lastScanUnread: last?.unreadOnPage ?? null,
             extra: [
               `openai: ${config.openaiApiKey ? 'فعال' : 'بدون کلید'}`,
               'playwright: استفاده نمی‌شود',

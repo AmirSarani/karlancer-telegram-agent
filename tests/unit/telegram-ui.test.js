@@ -54,7 +54,9 @@ test('status inline shows approvals link only when pending > 0', () => {
 
 test('afterScan inline has status callback', () => {
   const kb = afterScanInlineKeyboard();
-  assert.equal(kb.inline_keyboard[0][0].callback_data, 'refresh:status');
+  const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(data.includes('refresh:status'));
+  assert.ok(data.includes('goto:approvals'));
 });
 
 test('parseCallbackData covers approve/reject/refresh/goto', () => {
@@ -92,7 +94,7 @@ test('formatStatusCard is Persian and redacts secrets in lastError', () => {
     lastError: 'Bearer abcdefghijklmnop secret',
   });
   assert.match(text, /وضعیت ایجنت/);
-  assert.match(text, /احراز هویت کارلنسر: بله/);
+  assert.match(text, /کارلنسر: متصل/);
   assert.match(text, /\[REDACTED\]/);
   assert.doesNotMatch(text, /abcdefghijklmnop/);
 });

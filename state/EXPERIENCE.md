@@ -95,3 +95,26 @@ Extra fields beyond list view: `user_id`, `rate` / `rate_num` / `rate_sum`, `ava
 
 - Map `guest_name` → adapter `title` if UX needs it.
 - Owner `/scan` for continuous page-1 invite triage; deeper pagination still manual/successor work.
+
+---
+
+## 2026-09-20 — Telegram sync after rooms.scan
+
+### Problem
+
+- VPS lagged origin (`0c3c952` vs `aa12224`+); interim/API work never pushed owner-visible Telegram messages.
+- `rooms.scan` emitted `rooms.scanned` but **did not notify** the owner chat — bot looked “not synced” with agent work.
+- Status/welcome did not clearly show live Karlancer auth (`متصل`/`قطع`) or last scan time.
+
+### Fix
+
+- `src/telegram/notify.js`: `notifyOwner({ token, chatId, text, reply_markup? })` via grammY `api.sendMessage`; text redacted.
+- `rooms.scan` builds a page summary (total/page, unreadOnPage, top 3–5 priority rooms with guest_name / id / unread / preview), stores `kv.last_scan_summary`, emits once.
+- `src/index.js` `onEvent` → one Persian summary card per scan job (owner-only; dedupe by `scannedAt`).
+- `/start` + status card: `کارلنسر: متصل|قطع` + آخرین اسکن from kv.
+- Adapter maps `guest_name` → `guestName`/`title`; `last_message_preview` accepted.
+- Unit tests: `tests/unit/telegram-notify.test.js` (formatter only, no live Telegram).
+
+### Lesson
+
+**Events ≠ owner UX.** Worker/handoff projections are not enough — every owner-visible job completion that matters for triage must call `notifyOwner` once with a redacted Persian card. Keep deploy SHA current or Telegram UX and API work diverge silently.

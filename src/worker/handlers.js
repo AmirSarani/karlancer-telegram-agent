@@ -105,9 +105,28 @@ export async function handleJob(ctx, job) {
       }
       const page = p.page || 1;
       const keywords = p.keywords || ['دعوت', 'همکاری', 'پروژه'];
-      const { rooms } = await api.rooms.list({ page });
+      const { rooms, pagination } = await api.rooms.list({ page });
+      const list = rooms.filter(Boolean);
+      const unreadOnPage = list.filter((r) => Number(r.unread) > 0).length;
+      const priorityRooms = [...list]
+        .sort((a, b) => {
+          const au = Number(a.unread) > 0 ? 1 : 0;
+          const bu = Number(b.unread) > 0 ? 1 : 0;
+          if (bu !== au) return bu - au;
+          const at = Date.parse(a.updatedAt || '') || 0;
+          const bt = Date.parse(b.updatedAt || '') || 0;
+          return bt - at;
+        })
+        .slice(0, 5)
+        .map((r) => ({
+          guest_name: r.guestName || r.title || '—',
+          roomId: r.id,
+          unread: Number(r.unread) || 0,
+          last_message: String(r.lastMessage || '').slice(0, 120),
+        }));
+
       const matched = [];
-      for (const room of rooms.filter(Boolean)) {
+      for (const room of list) {
         const last = (room.lastMessage || '').toLowerCase();
         if (!keywords.some((kw) => last.includes(String(kw).toLowerCase()))) continue;
         const msgs = await api.messages.list(room.id, { page: 1 });
@@ -135,8 +154,29 @@ export async function handleJob(ctx, job) {
           meta: { updatedAt: room.updatedAt },
         });
       }
-      await emit(ctx, 'rooms.scanned', { page, matchedCount: matched.length });
-      return { ok: true, result: { page, matchedCount: matched.length, matched } };
+
+      const scannedAt = new Date().toISOString();
+      const summary = {
+        page,
+        total: pagination?.total ?? list.length,
+        lastPage: pagination?.lastPage ?? null,
+        pageCount: list.length,
+        unreadOnPage,
+        matchedCount: matched.length,
+        priorityRooms,
+        scannedAt,
+      };
+      // Persist for /status and /start (optional kv)
+      try {
+        db.prepare(
+          `INSERT INTO kv (key, value, updated_at) VALUES ('last_scan_summary', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        ).run(JSON.stringify(summary), scannedAt);
+      } catch (e) {
+        logger.warn('last_scan_kv_failed', { err: e.message });
+      }
+      await emit(ctx, 'rooms.scanned', summary);
+      return { ok: true, result: { ...summary, matched } };
     }
 
     case 'project.get': {

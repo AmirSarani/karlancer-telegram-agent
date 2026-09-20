@@ -61,7 +61,9 @@ export function statusInlineKeyboard({ pendingCount = 0 } = {}) {
 }
 
 export function afterScanInlineKeyboard() {
-  return new InlineKeyboard().text('📊 وضعیت', 'refresh:status');
+  return new InlineKeyboard()
+    .text('📋 تأییدها', 'goto:approvals')
+    .text('📊 وضعیت', 'refresh:status');
 }
 
 /**
@@ -137,16 +139,22 @@ export function approvalTarget(approval) {
  */
 export function formatStatusCard(s = {}) {
   const stateFa = s.state === 'paused' ? '⏸ مکث' : '▶️ در حال اجرا';
-  const auth =
-    s.karlancerAuth === true ? 'بله' : s.karlancerAuth === false ? 'خیر' : 'نامشخص';
+  const karlancerLine =
+    s.karlancerAuth === true
+      ? 'کارلنسر: متصل'
+      : s.karlancerAuth === false
+        ? 'کارلنسر: قطع'
+        : 'کارلنسر: نامشخص';
   const lines = [
     '📊 وضعیت ایجنت',
     '',
     `• حالت: ${stateFa}`,
+    `• ${karlancerLine}`,
     `• صف: در انتظار ${s.queued ?? 0} · در حال اجرا ${s.running ?? 0} · منتظر تأیید ${s.waitingApproval ?? 0}`,
     `• تأییدهای باز: ${s.pendingApprovals ?? 0}`,
-    `• احراز هویت کارلنسر: ${auth}`,
   ];
+  if (s.lastScanAt) lines.push(`• آخرین اسکن: ${formatAgeFa(s.lastScanAt)}`);
+  if (s.lastScanUnread != null) lines.push(`• خوانده‌نشده آخرین اسکن: ${s.lastScanUnread}`);
   if (s.db) lines.push(`• دیتابیس: ${s.db}`);
   if (s.worker) lines.push(`• worker: ${s.worker}`);
   if (s.startedAt) lines.push(`• شروع: ${formatAgeFa(s.startedAt)}`);
@@ -198,15 +206,30 @@ export function formatApprovalsList(pending, { max = 8 } = {}) {
   return { text, keyboards };
 }
 
-export function formatWelcome() {
-  return [
+/**
+ * @param {{ karlancerAuth?: boolean|null, lastScanAt?: string|null }} [opts]
+ */
+export function formatWelcome(opts = {}) {
+  const karlancerLine =
+    opts.karlancerAuth === true
+      ? 'کارلنسر: متصل'
+      : opts.karlancerAuth === false
+        ? 'کارلنسر: قطع'
+        : 'کارلنسر: نامشخص';
+  const lines = [
     'سلام 👋',
     '',
     'ایجنت کارلنسر آماده است.',
+    `• ${karlancerLine}`,
+  ];
+  if (opts.lastScanAt) lines.push(`• آخرین اسکن: ${formatAgeFa(opts.lastScanAt)}`);
+  lines.push(
+    '',
     'از منوی پایین استفاده کنید — نیازی به تایپ دستور نیست.',
     '',
-    'دکمه‌ها: وضعیت · تأییدها · اسکن · مکث/ادامه · راهنما',
-  ].join('\n');
+    'دکمه‌ها: وضعیت · تأییدها · اسکن · مکث/ادامه · راهنما'
+  );
+  return lines.join('\n');
 }
 
 export function formatHelp() {
@@ -257,4 +280,66 @@ export function mapMenuText(text) {
   if (t === BTN.HELP) return 'help';
   if (t === 'مکث/ادامه') return 'pause'; // legacy combined label → pause handler toggles via state in bot
   return null;
+}
+
+/**
+ * Truncate preview for Telegram cards (no secrets).
+ * @param {string} s
+ * @param {number} [max=72]
+ */
+export function truncatePreview(s, max = 72) {
+  const t = redactString(String(s || '')).replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  return t.slice(0, Math.max(0, max - 1)) + '…';
+}
+
+/**
+ * Persian summary card after rooms.scan (one message per job).
+ * @param {object} s
+ * @param {number} [s.page]
+ * @param {number|null} [s.total]
+ * @param {number|null} [s.lastPage]
+ * @param {number} [s.pageCount]
+ * @param {number} [s.unreadOnPage]
+ * @param {number} [s.matchedCount]
+ * @param {Array<{guest_name?:string,guestName?:string,roomId?:string|number,id?:string|number,unread?:number,last_message?:string,lastMessage?:string}>} [s.priorityRooms]
+ * @param {string|null} [s.scannedAt]
+ */
+export function formatScanSummary(s = {}) {
+  const page = s.page ?? 1;
+  const total = s.total != null ? s.total : '—';
+  const lastPage = s.lastPage != null ? s.lastPage : null;
+  const pageCount = s.pageCount ?? (s.priorityRooms?.length ?? 0);
+  const unread = s.unreadOnPage ?? 0;
+  const matched = s.matchedCount ?? 0;
+  const pageLabel = lastPage != null ? `${page}/${lastPage}` : String(page);
+
+  const lines = [
+    '📡 خلاصه اسکن اتاق‌ها',
+    '',
+    `• صفحه: ${pageLabel} · در این صفحه: ${pageCount}`,
+    `• مجموع اتاق‌ها: ${total}`,
+    `• خوانده‌نشده در این صفحه: ${unread}`,
+    matched > 0 ? `• دعوت‌های کاندید (کلیدواژه): ${matched}` : null,
+  ].filter((x) => x != null);
+
+  const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms.slice(0, 5) : [];
+  if (rooms.length) {
+    lines.push('', '🔝 اولویت‌ها:');
+    for (let i = 0; i < rooms.length; i++) {
+      const r = rooms[i];
+      const name = r.guest_name || r.guestName || r.title || '—';
+      const id = r.roomId ?? r.id ?? '—';
+      const ur = Number(r.unread) > 0 ? '🔴 خوانده‌نشده' : '⚪ خوانده';
+      const preview = truncatePreview(r.last_message || r.lastMessage || '', 64);
+      lines.push(`${i + 1}. ${name} · #${id} · ${ur}`);
+      if (preview) lines.push(`   «${preview}»`);
+    }
+  } else {
+    lines.push('', 'اولویتی در این صفحه نبود.');
+  }
+
+  lines.push('', '➡️ بعدی: باز کردن تأییدها / پاسخ HITL');
+  if (s.scannedAt) lines.push(`⏱ ${formatAgeFa(s.scannedAt)}`);
+  return lines.join('\n');
 }

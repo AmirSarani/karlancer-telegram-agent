@@ -102,6 +102,8 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       running,
       waitingApproval,
       karlancerAuth: null,
+      lastScanAt: null,
+      lastScanUnread: null,
       db: null,
       worker: null,
       lastError,
@@ -113,6 +115,8 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
         const extra = await hooks.onStatus(runtime);
         if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
           if (typeof extra.karlancerAuth === 'boolean') card.karlancerAuth = extra.karlancerAuth;
+          if (extra.lastScanAt) card.lastScanAt = String(extra.lastScanAt);
+          if (extra.lastScanUnread != null) card.lastScanUnread = extra.lastScanUnread;
           if (extra.db != null) card.db = String(extra.db);
           if (extra.worker != null) card.worker = String(extra.worker);
           if (extra.lastError) card.lastError = redactString(String(extra.lastError));
@@ -344,7 +348,14 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       );
       return;
     }
-    await ctx.reply(formatWelcome(), menuOpts());
+    const card = await collectStatus();
+    await ctx.reply(
+      formatWelcome({
+        karlancerAuth: card.karlancerAuth,
+        lastScanAt: card.lastScanAt,
+      }),
+      menuOpts()
+    );
   });
 
   bot.command('help', async (ctx) => {
