@@ -98,14 +98,15 @@ async function main() {
         queue,
         onStatus: async () => {
           const h = buildHealth({ db, worker, startedAt });
-          return [
-            `db: ${h.db}`,
-            `worker: ${h.worker}`,
-            `queue_depth: ${h.queue_depth}`,
-            `karlancer_auth: ${api.client.hasAuth ? 'token/cookie set' : 'MISSING'}`,
-            `openai: ${config.openaiApiKey ? 'key set' : 'no key'}`,
-            `playwright: not used`,
-          ].join('\n');
+          return {
+            db: h.db,
+            worker: h.worker,
+            karlancerAuth: Boolean(api.client.hasAuth),
+            extra: [
+              `openai: ${config.openaiApiKey ? 'فعال' : 'بدون کلید'}`,
+              'playwright: استفاده نمی‌شود',
+            ].join('\n'),
+          };
         },
       },
     });
