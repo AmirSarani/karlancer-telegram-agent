@@ -38,8 +38,12 @@ export function recommendPrice(features = {}) {
       standard: { amount: standard, label: 'استاندارد' },
       premium: { amount: premium, label: 'پیشرفته' },
     },
+    range: { min: economy, max: premium, currency: 'IRR' },
     confidence,
+    risk: complexity === 'high' ? 'elevated' : 'normal',
+    reason: `base[${complexity}] + pages/integrations factors`,
     evidence: { features, formula: 'base[complexity] + (pages-3)*1.5M + integrations*4M' },
     requiresApproval: true,
+    humanApprovalRequired: true,
   };
 }

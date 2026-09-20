@@ -1,5 +1,6 @@
 /**
  * TokenBudgetManager — decide whether to call LLM or answer deterministically.
+ * Cache expiry is checked in decide() — expired entries never return use_cache.
  */
 export class TokenBudgetManager {
   /**
@@ -9,6 +10,7 @@ export class TokenBudgetManager {
     this.dailyTokenLimit = opts.dailyTokenLimit ?? 200_000;
     this.perRequestLimit = opts.perRequestLimit ?? 8_000;
     this.getUsage = opts.getUsage || (() => ({ tokens: 0 }));
+    /** @type {Map<string, { value: unknown, exp: number }>} */
     this.cache = new Map();
   }
 
@@ -18,10 +20,15 @@ export class TokenBudgetManager {
    */
   decide(req) {
     const { intent, ambiguity = 0, cacheKey, estimatedTokens = 500 } = req;
-    if (cacheKey && this.cache.has(cacheKey)) return 'use_cache';
+
+    if (cacheKey) {
+      const hit = this.getCache(cacheKey);
+      if (hit != null) return 'use_cache';
+      // expired or missing — fall through (do NOT return use_cache)
+    }
 
     const usage = this.getUsage();
-    if (usage.tokens >= this.dailyTokenLimit) return 'budget_exceeded';
+    if ((usage.tokens || 0) >= this.dailyTokenLimit) return 'budget_exceeded';
     if (estimatedTokens > this.perRequestLimit) return 'retrieve_summary';
 
     const deterministic = new Set([
@@ -42,6 +49,7 @@ export class TokenBudgetManager {
     if (intent === 'analyze_project' || intent === 'write_proposal') return 'call_large_model';
     if (intent === 'classify' || intent === 'summarize') return 'call_small_model';
     if (intent === 'pricing') return 'call_small_model';
+    if (intent === 'draft_chat_reply') return 'call_small_model';
     return 'answer_directly';
   }
 

@@ -1,14 +1,17 @@
 /**
  * MCP tool registry — limited, typed, permissioned.
  * Mutations enqueue jobs with requires_approval; they do not long-run inline.
+ * Bid/chat execution uses VerifiedMutationContract only (often blocked_by_missing_api).
  */
 import { z } from 'zod';
 import crypto from 'node:crypto';
 import { buildHealth } from '../observability/health.js';
 import { memorySearch, memoryAppend } from '../memory/store.js';
 import { recommendPrice } from '../intelligence/pricing.js';
+import { getInsight, recordFeedback } from '../intelligence/engine.js';
 import { requireToolPermission } from '../security/auth.js';
 import { redactDeep } from '../security/redaction.js';
+import { bidIdempotencyKey, messageIdempotencyKey } from '../api/contracts/verified-mutation.js';
 
 function textResult(obj) {
   return { content: [{ type: 'text', text: JSON.stringify(redactDeep(obj), null, 2) }] };
@@ -26,14 +29,13 @@ function errResult(code, message, extra = {}) {
  * @param {object} ctx
  */
 export function registerTools(server, ctx) {
-  const { db, queue, api, startedAt, getScopes = () => ['admin'] } = ctx;
+  const { db, queue, api, startedAt, getScopes = () => ['admin'], getTenantId = () => 'default' } = ctx;
 
   const guard = (meta, fn) => async (args) => {
     const scopes = getScopes();
     if (!requireToolPermission(meta, scopes)) {
       return errResult('forbidden', `permission ${meta.permission} required`);
     }
-    // audit
     try {
       db.prepare(
         `INSERT INTO audit_log (id, actor, action, tool, input_hash, result_code, correlation_id, created_at, detail_json)
@@ -65,6 +67,28 @@ export function registerTools(server, ctx) {
     guard({ name: 'health.get', permission: 'read' }, async ({ detailed }) => {
       const h = buildHealth({ db, worker: ctx.worker, startedAt });
       return textResult(detailed ? h : { status: h.status, ts: h.ts });
+    })
+  );
+
+  server.registerTool(
+    'rooms.list',
+    {
+      description: 'List Karlancer chat rooms (authenticated). Read-only.',
+      inputSchema: { page: z.number().int().min(1).optional() },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'rooms.list', permission: 'read' }, async ({ page }) => {
+      try {
+        const data = await api.rooms.list({ page: page || 1 });
+        return textResult({
+          page: data.page,
+          count: data.rooms.length,
+          pagination: data.pagination,
+          rooms: data.rooms.map(({ raw, ...r }) => r),
+        });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
     })
   );
 
@@ -103,19 +127,27 @@ export function registerTools(server, ctx) {
       const job = queue.create({
         goal: 'rooms.scan',
         requestedBy: 'mcp',
+        tenantId: getTenantId(),
         payload: { page: page || 1, keywords },
         idempotencyKey: wait ? null : `scan:${page || 1}:${Date.now()}`,
       });
       if (wait) {
-        // process once inline for MCP convenience (still short)
-        const claimed = queue.claim('mcp-inline');
+        // FIX: claim THIS job only — never steal another queued job
+        const claimed = queue.claimById(job.jobId, 'mcp-inline');
         if (claimed && claimed.jobId === job.jobId) {
           const { handleJob } = await import('../worker/handlers.js');
-          const outcome = await handleJob({ api, db, queue }, claimed);
+          const outcome = await handleJob({ api, db, queue, llm: ctx.llm, budget: ctx.budget }, claimed);
           if (outcome.ok) queue.succeed(claimed.jobId, outcome.result);
-          else queue.fail(claimed.jobId, outcome.errorCode || 'failed', outcome.detail || {});
+          else if (outcome.terminal) {
+            /* status already set */
+          } else queue.fail(claimed.jobId, outcome.errorCode || 'failed', outcome.detail || {});
           return textResult({ jobId: job.jobId, ...outcome });
         }
+        return textResult({
+          jobId: job.jobId,
+          status: queue.get(job.jobId)?.status,
+          note: 'wait requested but job not claimable (status changed); poll job.get_status',
+        });
       }
       return textResult({ jobId: job.jobId, status: job.status });
     })
@@ -138,6 +170,7 @@ export function registerTools(server, ctx) {
           roomId: data.roomId,
           page: data.page,
           count: data.messages.length,
+          pagination: data.pagination,
           messages: data.messages,
         });
       } catch (e) {
@@ -171,7 +204,7 @@ export function registerTools(server, ctx) {
     'bids.submit_plan',
     {
       description:
-        'Create a bid-submit job that REQUIRES human approval. Does not send the bid. Use job.get_status / approvals.',
+        'Create a bid-submit job that REQUIRES human approval. Does not send the bid. Until VerifiedMutationContract exists, execution returns blocked_by_missing_api (no POST).',
       inputSchema: {
         projectId: z.union([z.string(), z.number()]),
         proposalText: z.string().min(10),
@@ -180,19 +213,29 @@ export function registerTools(server, ctx) {
       },
     },
     guard({ name: 'bids.submit_plan', permission: 'write' }, async (args) => {
+      const idem = bidIdempotencyKey({
+        projectId: args.projectId,
+        proposalText: args.proposalText,
+        price: args.price,
+        days: args.days,
+      });
       const job = queue.create({
         goal: 'bids.submit',
         requestedBy: 'mcp',
+        tenantId: getTenantId(),
         payload: args,
         requiresApproval: true,
-        idempotencyKey: `bid:${args.projectId}:${crypto.createHash('sha256').update(args.proposalText).digest('hex').slice(0, 12)}`,
+        idempotencyKey: idem,
+        operationId: idem,
+        targetRef: String(args.projectId),
       });
       const approval = queue.getApprovalForJob(job.jobId);
       return textResult({
         jobId: job.jobId,
         status: job.status,
         approvalId: approval?.approval_id,
-        note: 'Waiting for Telegram /approve or approvals.decide — bid endpoint may still be blocked_by_missing_api',
+        payloadHash: approval?.payload_hash,
+        note: 'Waiting for approvals.decide — bid POST blocked until VerifiedMutationContract registered',
       });
     })
   );
@@ -200,30 +243,91 @@ export function registerTools(server, ctx) {
   server.registerTool(
     'messages.send_plan',
     {
-      description: 'Plan sending a room message (requires approval). Chat send API may be unverified.',
+      description:
+        'Plan sending a room message (requires approval). No POST until VerifiedMutationContract.',
       inputSchema: {
         roomId: z.union([z.string(), z.number()]),
         text: z.string().min(1),
+        idempotencyKey: z.string().optional(),
       },
     },
     guard({ name: 'messages.send_plan', permission: 'write' }, async (args) => {
+      const opId = args.idempotencyKey || messageIdempotencyKey({ roomId: args.roomId, text: args.text });
       const job = queue.create({
         goal: 'messages.send',
         requestedBy: 'mcp',
-        payload: args,
+        tenantId: getTenantId(),
+        payload: { roomId: args.roomId, text: args.text, operationId: opId },
         requiresApproval: true,
+        idempotencyKey: opId,
+        operationId: opId,
+        targetRef: String(args.roomId),
       });
       const approval = queue.getApprovalForJob(job.jobId);
-      return textResult({ jobId: job.jobId, status: job.status, approvalId: approval?.approval_id });
+      return textResult({ jobId: job.jobId, status: job.status, approvalId: approval?.approval_id, payloadHash: approval?.payload_hash });
+    })
+  );
+
+  server.registerTool(
+    'project.analyze_plan',
+    {
+      description: 'Enqueue project analysis (LLM or deterministic fallback). Does not bid/send.',
+      inputSchema: {
+        projectId: z.union([z.string(), z.number()]),
+        pages: z.number().optional(),
+        integrations: z.number().optional(),
+      },
+    },
+    guard({ name: 'project.analyze_plan', permission: 'write' }, async (args) => {
+      const job = queue.create({
+        goal: 'project.analyze',
+        requestedBy: 'mcp',
+        tenantId: getTenantId(),
+        payload: args,
+        idempotencyKey: `analyze:${args.projectId}:${Date.now()}`,
+      });
+      return textResult({ jobId: job.jobId, status: job.status });
+    })
+  );
+
+  server.registerTool(
+    'proposal.draft_plan',
+    {
+      description: 'Enqueue proposal draft. Never auto-sends; human approval required for any bid.',
+      inputSchema: {
+        projectId: z.union([z.string(), z.number()]),
+        project: z.record(z.unknown()).optional(),
+        analysis: z.record(z.unknown()).optional(),
+        pricing: z.record(z.unknown()).optional(),
+      },
+    },
+    guard({ name: 'proposal.draft_plan', permission: 'write' }, async (args) => {
+      const job = queue.create({
+        goal: 'proposal.draft',
+        requestedBy: 'mcp',
+        tenantId: getTenantId(),
+        payload: args,
+        requiresApproval: false,
+      });
+      return textResult({ jobId: job.jobId, status: job.status, note: 'Draft only — use bids.submit_plan to propose send' });
     })
   );
 
   server.registerTool(
     'job.create',
     {
-      description: 'Create a durable job. Allowed goals: rooms.scan, project.get, messages.list, bids.check, health.ping. Mutations use *_plan tools.',
+      description:
+        'Create a durable job. Allowed goals: rooms.scan, project.get, messages.list, bids.check, health.ping, project.analyze, reconcile.bids. Mutations use *_plan tools.',
       inputSchema: {
-        goal: z.enum(['rooms.scan', 'project.get', 'messages.list', 'bids.check', 'health.ping']),
+        goal: z.enum([
+          'rooms.scan',
+          'project.get',
+          'messages.list',
+          'bids.check',
+          'health.ping',
+          'project.analyze',
+          'reconcile.bids',
+        ]),
         payload: z.record(z.unknown()).optional(),
         idempotencyKey: z.string().optional(),
       },
@@ -233,6 +337,7 @@ export function registerTools(server, ctx) {
         goal,
         payload: payload || {},
         requestedBy: 'mcp',
+        tenantId: getTenantId(),
         idempotencyKey: idempotencyKey || null,
       });
       return textResult({ jobId: job.jobId, status: job.status });
@@ -242,13 +347,17 @@ export function registerTools(server, ctx) {
   server.registerTool(
     'job.get_status',
     {
-      description: 'Get job status by job_id.',
+      description: 'Get job status by job_id (tenant-scoped when multi-tenant).',
       inputSchema: { jobId: z.string().uuid() },
       annotations: { readOnlyHint: true },
     },
     guard({ name: 'job.get_status', permission: 'read' }, async ({ jobId }) => {
       const job = queue.get(jobId);
       if (!job) return errResult('not_found', 'job not found');
+      const tenant = getTenantId();
+      if (tenant !== 'default' && job.tenantId !== tenant) {
+        return errResult('forbidden', 'tenant isolation');
+      }
       return textResult(job);
     })
   );
@@ -281,7 +390,12 @@ export function registerTools(server, ctx) {
       annotations: { readOnlyHint: true },
     },
     guard({ name: 'memory.search', permission: 'read' }, async ({ q, kind, limit }) => {
-      const items = memorySearch(db, { q: q || '', kind: kind || null, limit: limit || 20 });
+      const items = memorySearch(db, {
+        tenantId: getTenantId(),
+        q: q || '',
+        kind: kind || null,
+        limit: limit || 20,
+      });
       return textResult({ count: items.length, items });
     })
   );
@@ -297,7 +411,12 @@ export function registerTools(server, ctx) {
       },
     },
     guard({ name: 'memory.append_event', permission: 'write' }, async ({ kind, content, refId }) => {
-      const row = memoryAppend(db, { kind, content, refId: refId || null });
+      const row = memoryAppend(db, {
+        tenantId: getTenantId(),
+        kind,
+        content,
+        refId: refId || null,
+      });
       return textResult(row);
     })
   );
@@ -305,7 +424,8 @@ export function registerTools(server, ctx) {
   server.registerTool(
     'pricing.get_recommendation',
     {
-      description: 'Deterministic pricing recommendation (rules v1). Always requires human approval before use in bids.',
+      description:
+        'Deterministic pricing recommendation (rules v1). Always requires human approval before use in bids.',
       inputSchema: {
         complexity: z.enum(['low', 'medium', 'high']).optional(),
         pages: z.number().optional(),
@@ -330,6 +450,7 @@ export function registerTools(server, ctx) {
     },
     guard({ name: 'pricing.record_decision', permission: 'write' }, async ({ projectId, amount, note }) => {
       const row = memoryAppend(db, {
+        tenantId: getTenantId(),
         kind: 'pricing_decision',
         refId: projectId,
         content: `amount=${amount} ${note || ''}`.trim(),
@@ -347,26 +468,44 @@ export function registerTools(server, ctx) {
       annotations: { readOnlyHint: true },
     },
     guard({ name: 'approvals.list', permission: 'read' }, async () => {
-      return textResult({ pending: queue.pendingApprovals() });
+      return textResult({ pending: queue.pendingApprovals(getTenantId() === 'default' ? null : getTenantId()) });
+    })
+  );
+
+  server.registerTool(
+    'approvals.get',
+    {
+      description: 'Get one approval by id.',
+      inputSchema: { approvalId: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'approvals.get', permission: 'read' }, async ({ approvalId }) => {
+      const a = queue.getApproval(approvalId);
+      if (!a) return errResult('not_found', 'approval not found');
+      return textResult(a);
     })
   );
 
   server.registerTool(
     'approvals.decide',
     {
-      description: 'Approve or reject a pending approval (HITL).',
+      description: 'Approve or reject a pending approval (HITL). Payload tamper invalidates approval.',
       inputSchema: {
         approvalId: z.string(),
         approve: z.boolean(),
         decidedBy: z.string().optional(),
+        expectedPayloadHash: z.string().optional(),
       },
     },
-    guard({ name: 'approvals.decide', permission: 'approve' }, async ({ approvalId, approve, decidedBy }) => {
+    guard({ name: 'approvals.decide', permission: 'approve' }, async ({ approvalId, approve, decidedBy, expectedPayloadHash }) => {
       const result = queue.decideApproval(approvalId, {
         approve,
         decidedBy: decidedBy || 'mcp',
+        expectedPayloadHash: expectedPayloadHash || null,
       });
       if (!result) return errResult('not_found', 'approval not found');
+      if (result.tampered) return errResult('payload_tampered', 'approval payload hash mismatch', result);
+      if (result.expired) return errResult('approval_expired', 'approval expired', result);
       return textResult(result);
     })
   );
@@ -380,7 +519,9 @@ export function registerTools(server, ctx) {
     },
     guard({ name: 'audit.search', permission: 'read' }, async ({ limit }) => {
       const rows = db
-        .prepare(`SELECT id, actor, action, tool, result_code, correlation_id, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`)
+        .prepare(
+          `SELECT id, actor, action, tool, result_code, correlation_id, created_at FROM audit_log ORDER BY created_at DESC LIMIT ?`
+        )
         .all(limit || 50);
       return textResult({ count: rows.length, rows });
     })
@@ -389,17 +530,48 @@ export function registerTools(server, ctx) {
   server.registerTool(
     'intelligence.get_insight',
     {
-      description: 'Return confirmed intelligence notes (rules + memory). Minimal layer.',
-      inputSchema: { q: z.string().optional() },
+      description:
+        'Return intelligence (rules + memory). Returns insufficient_data when samples are thin. No fake ML.',
+      inputSchema: {
+        q: z.string().optional(),
+        complexity: z.enum(['low', 'medium', 'high']).optional(),
+        pages: z.number().optional(),
+        integrations: z.number().optional(),
+      },
       annotations: { readOnlyHint: true },
     },
-    guard({ name: 'intelligence.get_insight', permission: 'read' }, async ({ q }) => {
-      const items = memorySearch(db, { kind: 'insight', q: q || '', limit: 10 });
-      return textResult({
-        layer: 'rules+memory',
-        note: 'Full ML/RAG not enabled; returning stored insights only',
-        items,
+    guard({ name: 'intelligence.get_insight', permission: 'read' }, async (args) => {
+      const insight = getInsight(db, {
+        features: {
+          complexity: args.complexity,
+          pages: args.pages,
+          integrations: args.integrations,
+        },
       });
+      const items = memorySearch(db, {
+        tenantId: getTenantId(),
+        kind: 'insight',
+        q: args.q || '',
+        limit: 10,
+      });
+      return textResult({ ...insight, storedInsights: items });
+    })
+  );
+
+  server.registerTool(
+    'intelligence.record_feedback',
+    {
+      description: 'Record human decision / outcome for a recommendation (layer 5).',
+      inputSchema: {
+        recommendationId: z.string().optional(),
+        humanDecision: z.string(),
+        actualOutcome: z.string().optional(),
+        feedback: z.string().optional(),
+      },
+    },
+    guard({ name: 'intelligence.record_feedback', permission: 'write' }, async (args) => {
+      const row = recordFeedback(db, { ...args, tenantId: getTenantId() });
+      return textResult(row);
     })
   );
 }

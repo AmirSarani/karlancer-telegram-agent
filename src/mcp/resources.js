@@ -6,12 +6,20 @@ import path from 'node:path';
  * @param {{ stateDir: string, root: string }} ctx
  */
 export function registerResources(server, ctx) {
-  const files = [
-    ['karlancer://handoff', 'AGENT_HANDOFF.md', 'Latest agent handoff projection'],
-    ['karlancer://project-state', 'PROJECT_STATE.md', 'Canonical project state projection'],
-    ['karlancer://decisions', 'DECISIONS.md', 'Architecture decisions log'],
-    ['karlancer://audit-doc', null, 'API-first audit (docs)'],
-  ];
+  const stateDir = path.resolve(ctx.stateDir);
+  const root = path.resolve(ctx.root);
+
+  async function readUnder(base, rel) {
+    const full = path.resolve(base, rel);
+    if (!full.startsWith(base + path.sep) && full !== base) {
+      return '_(path_traversal_blocked)_';
+    }
+    try {
+      return await fs.readFile(full, 'utf8');
+    } catch {
+      return `_(missing projection: ${rel})_`;
+    }
+  }
 
   server.registerResource(
     'handoff',
@@ -22,7 +30,7 @@ export function registerResources(server, ctx) {
         {
           uri: 'karlancer://handoff',
           mimeType: 'text/markdown',
-          text: await readSafe(path.join(ctx.stateDir, 'AGENT_HANDOFF.md')),
+          text: await readUnder(stateDir, 'AGENT_HANDOFF.md'),
         },
       ],
     })
@@ -37,7 +45,7 @@ export function registerResources(server, ctx) {
         {
           uri: 'karlancer://project-state',
           mimeType: 'text/markdown',
-          text: await readSafe(path.join(ctx.stateDir, 'PROJECT_STATE.md')),
+          text: await readUnder(stateDir, 'PROJECT_STATE.md'),
         },
       ],
     })
@@ -46,13 +54,13 @@ export function registerResources(server, ctx) {
   server.registerResource(
     'api-audit',
     'karlancer://api-audit',
-    { description: 'Phase 0 API_FIRST_AUDIT.md', mimeType: 'text/markdown' },
+    { description: 'IMPLEMENTATION_AUDIT.md', mimeType: 'text/markdown' },
     async () => ({
       contents: [
         {
           uri: 'karlancer://api-audit',
           mimeType: 'text/markdown',
-          text: await readSafe(path.join(ctx.root, 'docs/API_FIRST_AUDIT.md')),
+          text: await readUnder(root, 'docs/IMPLEMENTATION_AUDIT.md'),
         },
       ],
     })
@@ -67,17 +75,9 @@ export function registerResources(server, ctx) {
         {
           uri: 'karlancer://api-catalog',
           mimeType: 'text/markdown',
-          text: await readSafe(path.join(ctx.root, 'docs/API_CATALOG.md')),
+          text: await readUnder(root, 'docs/API_CATALOG.md'),
         },
       ],
     })
   );
-}
-
-async function readSafe(p) {
-  try {
-    return await fs.readFile(p, 'utf8');
-  } catch {
-    return `_(missing projection: ${p})_`;
-  }
 }
