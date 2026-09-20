@@ -11,9 +11,17 @@ export function createRoomsAdapter(client) {
         payload?.rooms ||
         [];
       const list = Array.isArray(rooms) ? rooms : [];
+      const meta = payload?.data || payload || {};
+      const pagination = {
+        currentPage: meta.current_page ?? (Number(page) || 1),
+        lastPage: meta.last_page ?? null,
+        perPage: meta.per_page ?? null,
+        total: meta.total ?? list.length,
+      };
       return {
         page: Number(page) || 1,
-        rooms: list.map(normalizeRoom),
+        rooms: list.map(normalizeRoom).filter(Boolean),
+        pagination,
         raw: payload,
       };
     },

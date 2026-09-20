@@ -1,8 +1,13 @@
 /**
  * Room messages — confirmed GET /api/rooms/{id}/messages-pg
- * Send — try-list (unverified) from extension shared/room-messages.js
+ * Send — VerifiedMutationContract only (no try-list POST).
  */
 import { KarlancerApiError } from '../errors.js';
+import {
+  executeVerifiedMutation,
+  getVerifiedMutation,
+  messageIdempotencyKey,
+} from '../contracts/verified-mutation.js';
 
 export function extractMessageList(apiJson) {
   if (!apiJson) return [];
@@ -36,13 +41,23 @@ export function normalizeMessage(raw) {
     id: id != null ? String(id) : null,
     text,
     createdAt: raw.created_at || raw.createdAt || raw.date || null,
-    projectId: raw.project_id != null ? String(raw.project_id) : raw.projectId != null ? String(raw.projectId) : null,
-    userId: raw.user_id != null ? String(raw.user_id) : raw.userId != null ? String(raw.userId) : null,
+    projectId:
+      raw.project_id != null
+        ? String(raw.project_id)
+        : raw.projectId != null
+          ? String(raw.projectId)
+          : null,
+    userId:
+      raw.user_id != null ? String(raw.user_id) : raw.userId != null ? String(raw.userId) : null,
     isOwn,
     raw,
   };
 }
 
+/**
+ * Documented extension try-list paths — for HAR guidance / audit ONLY.
+ * MUST NOT be used to POST in production.
+ */
 export function getSendApiCandidates(roomId, text) {
   const message = String(text || '');
   const rid = Number(roomId) || roomId;
@@ -76,48 +91,77 @@ export function createMessagesAdapter(client) {
       if (!roomId) throw new KarlancerApiError('invalid_input', 'roomId required');
       const res = await client.get(`/api/rooms/${roomId}/messages-pg?page=${Number(page) || 1}`);
       const rawList = extractMessageList(res.data);
+      const nested = res.data?.data?.messages || {};
+      const pagination = {
+        currentPage: nested.current_page ?? (Number(page) || 1),
+        lastPage: nested.last_page ?? null,
+        perPage: nested.per_page ?? null,
+        total: nested.total ?? rawList.length,
+      };
       return {
         roomId: String(roomId),
         page: Number(page) || 1,
         messages: rawList.map(normalizeMessage).filter(Boolean),
+        pagination,
         raw: res.data,
       };
     },
 
     /**
-     * Unverified send — returns blocked_by_missing_api when all attempts fail.
-     * Caller MUST require human approval before invoking.
+     * Send message — ONLY via VerifiedMutationContract.
+     * Until evidence: NO POST.
      */
-    async send(roomId, text) {
+    async send(roomId, text, { operationId } = {}) {
       if (!roomId) throw new KarlancerApiError('invalid_input', 'roomId required');
       if (!text || !String(text).trim()) throw new KarlancerApiError('invalid_input', 'text required');
-      const result = await client.tryPost(getSendApiCandidates(roomId, text), { label: 'send_message' });
-      if (result.ok) {
+
+      const contract = getVerifiedMutation('messages.send');
+      const opId = messageIdempotencyKey({
+        roomId,
+        text,
+        operationId: operationId || undefined,
+      });
+
+      if (!contract) {
         return {
-          ok: true,
+          ok: false,
+          status: 'blocked_by_missing_api',
+          reason: 'definitive_chat_send_endpoint_unverified',
+          posted: false,
+          operationId: opId,
           roomId: String(roomId),
-          endpoint: result.path,
-          shape: result.shape,
-          attempts: result.attempts,
+          hint: 'Capture authenticated HAR with 2xx message POST; register VerifiedMutationContract. See docs/HAR_CAPTURE.md',
+          // Expose candidate paths for operator HAR guidance only — not attempted
+          candidatePathsForHarOnly: getSendApiCandidates(roomId, text).map((c) => c.path).filter((v, i, a) => a.indexOf(v) === i),
         };
       }
-      return {
-        ok: false,
-        status: 'blocked_by_missing_api',
-        reason: 'definitive_chat_send_endpoint_unverified',
-        attempts: result.attempts,
-        error: result.error?.message || 'send failed',
-      };
+
+      return executeVerifiedMutation(client, 'messages.send', {
+        operationId: opId,
+        pathParams: { roomId },
+        payload: { message: String(text) },
+      });
     },
 
+    /**
+     * Mark seen — unverified; no production POST until contract registered.
+     */
     async markSeen(roomId) {
-      const candidates = [
-        { path: `/api/rooms/${roomId}/seen`, body: {}, shape: 'empty' },
-        { path: `/api/rooms/${roomId}/read`, body: {}, shape: 'empty' },
-        { path: `/api/rooms/seen`, body: { room_id: roomId }, shape: 'room_id' },
-        { path: `/api/messages/seen`, body: { room_id: roomId }, shape: 'room_id' },
-      ];
-      return client.tryPost(candidates, { label: 'mark_seen' });
+      const contract = getVerifiedMutation('messages.mark_seen');
+      if (!contract) {
+        return {
+          ok: false,
+          status: 'blocked_by_missing_api',
+          reason: 'mark_seen_endpoint_unverified',
+          posted: false,
+          roomId: String(roomId),
+        };
+      }
+      return executeVerifiedMutation(client, 'messages.mark_seen', {
+        operationId: `seen:${roomId}:${Date.now()}`,
+        pathParams: { roomId },
+        payload: {},
+      });
     },
   };
 }

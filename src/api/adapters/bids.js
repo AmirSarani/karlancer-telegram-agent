@@ -1,5 +1,11 @@
-/** Bid check (confirmed) + submit try-list (unverified) */
+/** Bid check (confirmed) + submit via VerifiedMutationContract only */
+import crypto from 'node:crypto';
 import { KarlancerApiError } from '../errors.js';
+import {
+  executeVerifiedMutation,
+  getVerifiedMutation,
+  bidIdempotencyKey,
+} from '../contracts/verified-mutation.js';
 
 export function createBidsAdapter(client) {
   return {
@@ -9,46 +15,74 @@ export function createBidsAdapter(client) {
       const qs = ids.map((id, i) => `projectIds[${i}]=${encodeURIComponent(id)}`).join('&');
       const res = await client.get(`/api/check-bid?${qs}`);
       const map = res.data?.data?.has_submitted_bid || {};
+      const pagination = extractPagination(res.data);
       return {
         hasSubmittedBid: map,
         weBidFor: (id) => Boolean(map[id] || map[String(id)]),
+        pagination,
         raw: res.data,
+        normalized: { projectIds: ids.map(String), hasSubmittedBid: map },
       };
     },
 
     /**
-     * Unverified bid submit — extension try-list only.
-     * MUST be gated by approval. Returns blocked_by_missing_api if no 2xx.
+     * Submit bid — ONLY via VerifiedMutationContract.
+     * Until contract evidence exists: NO POST, return blocked_by_missing_api.
      */
-    async submit({ projectId, proposalText, price, days }) {
+    async submit({ projectId, proposalText, price, days, operationId }) {
       if (!projectId) throw new KarlancerApiError('invalid_input', 'projectId required');
       if (!proposalText) throw new KarlancerApiError('invalid_input', 'proposalText required');
       const p = Number(price);
       const d = Number(days);
-      const description = String(proposalText);
-      const bodies = [
-        { project_id: Number(projectId), bid_price: p, bid_duration: d, bid_description: description },
-        { project_id: Number(projectId), price: p, duration: d, description },
-        { project_id: Number(projectId), amount: p, days: d, message: description },
-      ];
-      const paths = ['/api/bids', '/api/projects/bid', `/api/projects/${projectId}/bids`];
-      const candidates = [];
-      for (const path of paths) {
-        for (const body of bodies) {
-          candidates.push({ path, body, shape: Object.keys(body).join(',') });
-        }
+      if (!Number.isFinite(p) || p <= 0) throw new KarlancerApiError('invalid_input', 'price required');
+      if (!Number.isFinite(d) || d <= 0) throw new KarlancerApiError('invalid_input', 'days required');
+
+      const contract = getVerifiedMutation('bids.submit');
+      const opId =
+        operationId ||
+        bidIdempotencyKey({
+          projectId,
+          proposalText,
+          price: p,
+          days: d,
+          contractVersion: contract?.contractVersion || 'none',
+        });
+
+      if (!contract) {
+        return {
+          ok: false,
+          status: 'blocked_by_missing_api',
+          reason: 'definitive_bid_endpoint_unverified',
+          posted: false,
+          operationId: opId,
+          hint: 'Capture authenticated HAR with 2xx bid POST; register VerifiedMutationContract. See docs/HAR_CAPTURE.md',
+        };
       }
-      const result = await client.tryPost(candidates, { label: 'submit_bid' });
-      if (result.ok) {
-        return { ok: true, endpoint: result.path, shape: result.shape, attempts: result.attempts, data: result.data };
-      }
-      return {
-        ok: false,
-        status: 'blocked_by_missing_api',
-        reason: 'definitive_bid_endpoint_unverified',
-        attempts: result.attempts,
-        error: result.error?.message || 'bid submit failed',
-      };
+
+      return executeVerifiedMutation(client, 'bids.submit', {
+        operationId: opId,
+        pathParams: { projectId },
+        payload: {
+          project_id: Number(projectId) || projectId,
+          bid_price: p,
+          bid_duration: d,
+          bid_description: String(proposalText),
+        },
+      });
     },
+
+    idempotencyKey(args) {
+      return bidIdempotencyKey(args);
+    },
+  };
+}
+
+function extractPagination(payload) {
+  const meta = payload?.data?.meta || payload?.meta || payload?.data || {};
+  return {
+    currentPage: meta.current_page ?? meta.page ?? null,
+    lastPage: meta.last_page ?? meta.total_pages ?? null,
+    perPage: meta.per_page ?? null,
+    total: meta.total ?? null,
   };
 }

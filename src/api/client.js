@@ -1,10 +1,14 @@
 /**
  * Typed HTTP client for karlancer.com — no browser, no Playwright.
  * Auth: KARLANCER_ACCESS_TOKEN (Bearer) and/or KARLANCER_COOKIE.
+ *
+ * Reads may retry. Mutations (opts.mutation=true) NEVER auto-retry.
+ * tryPost is discovery-only and MUST NOT be used for bid/chat production mutations.
  */
 import { assertAllowedUrl } from '../security/redaction.js';
 import { mapHttpError, KarlancerApiError } from './errors.js';
 import { logger } from '../observability/logger.js';
+import { RateLimiter } from './rate-limit.js';
 
 /**
  * @typedef {object} KarlancerClientOptions
@@ -14,6 +18,7 @@ import { logger } from '../observability/logger.js';
  * @property {number} [timeoutMs]
  * @property {number} [maxRetries]
  * @property {typeof fetch} [fetchImpl]
+ * @property {RateLimiter} [rateLimiter]
  */
 
 export class KarlancerClient {
@@ -26,12 +31,22 @@ export class KarlancerClient {
     this.timeoutMs = opts.timeoutMs ?? 30000;
     this.maxRetries = opts.maxRetries ?? 2;
     this.fetchImpl = opts.fetchImpl || globalThis.fetch.bind(globalThis);
+    this.rateLimiter = opts.rateLimiter || new RateLimiter({ capacity: 30, refillPerSec: 8 });
     this._circuitOpenUntil = 0;
     this._consecutiveFailures = 0;
   }
 
   get hasAuth() {
     return Boolean(this.accessToken || this.cookie);
+  }
+
+  /** Hot-reload token without process restart (rotation). */
+  setAccessToken(token) {
+    this.accessToken = token || '';
+  }
+
+  setCookie(cookie) {
+    this.cookie = cookie || '';
   }
 
   _headers(extra = {}) {
@@ -54,7 +69,7 @@ export class KarlancerClient {
   /**
    * @param {string} method
    * @param {string} path
-   * @param {{ body?: unknown, auth?: boolean, retries?: number }} [opts]
+   * @param {{ body?: unknown, auth?: boolean, retries?: number, mutation?: boolean, operationId?: string }} [opts]
    */
   async request(method, path, opts = {}) {
     if (Date.now() < this._circuitOpenUntil) {
@@ -62,13 +77,19 @@ export class KarlancerClient {
     }
     const url = path.startsWith('http') ? path : `${this.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
     if (!path.startsWith('http')) assertAllowedUrl(this.baseUrl);
+    else assertAllowedUrl(url);
 
     const needsAuth = opts.auth !== false && !path.includes('/api/publics/');
     if (needsAuth && !this.hasAuth) {
       throw new KarlancerApiError('missing_auth', 'KARLANCER_ACCESS_TOKEN or KARLANCER_COOKIE required');
     }
 
-    const retries = opts.retries ?? this.maxRetries;
+    // Mutations: zero retries. Reads: configurable.
+    const isMutation = opts.mutation === true || ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase());
+    const retries = isMutation ? 0 : (opts.retries ?? this.maxRetries);
+
+    await this.rateLimiter.waitTake(1);
+
     let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
       const ctrl = new AbortController();
@@ -83,6 +104,9 @@ export class KarlancerClient {
           signal: ctrl.signal,
         };
         if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+        if (opts.operationId) {
+          init.headers = { ...init.headers, 'X-Idempotency-Key': opts.operationId };
+        }
 
         const res = await this.fetchImpl(url, init);
         const text = await res.text();
@@ -90,35 +114,44 @@ export class KarlancerClient {
         try {
           json = text ? JSON.parse(text) : null;
         } catch {
-          json = { raw: text?.slice(0, 500) };
+          json = { raw: text?.slice(0, 200) };
         }
 
         if (res.status >= 500) {
-          lastErr = mapHttpError(res.status, path, json);
-          if (attempt < retries) {
-            await sleep(400 * (attempt + 1) + Math.floor(Math.random() * 200));
+          lastErr = mapHttpError(res.status, path, sanitizeBody(json));
+          if (!isMutation && attempt < retries) {
+            await sleep(backoffMs(attempt));
             continue;
           }
           this._trip(lastErr);
           throw lastErr;
         }
 
+        if (res.status === 429) {
+          lastErr = mapHttpError(429, path, sanitizeBody(json));
+          if (!isMutation && attempt < retries) {
+            await sleep(backoffMs(attempt) * 2);
+            continue;
+          }
+          throw lastErr;
+        }
+
         if (!res.ok) {
-          const err = mapHttpError(res.status, path, json);
-          if (res.status >= 500) this._trip(err);
-          else this._consecutiveFailures = 0;
+          const err = mapHttpError(res.status, path, sanitizeBody(json));
+          this._consecutiveFailures = 0;
           throw err;
         }
 
         this._consecutiveFailures = 0;
-        return { status: res.status, data: json, headers: res.headers };
+        return { status: res.status, data: json, headers: res.headers, rawText: text };
       } catch (e) {
         if (e instanceof KarlancerApiError) throw e;
-        lastErr = e.name === 'AbortError'
-          ? new KarlancerApiError('timeout', `Timeout after ${this.timeoutMs}ms`, { path })
-          : new KarlancerApiError('network', e.message || 'network error', { path });
-        if (attempt < retries) {
-          await sleep(400 * (attempt + 1));
+        lastErr =
+          e.name === 'AbortError'
+            ? new KarlancerApiError('timeout', `Timeout after ${this.timeoutMs}ms`, { path })
+            : new KarlancerApiError('network', e.message || 'network error', { path });
+        if (!isMutation && attempt < retries) {
+          await sleep(backoffMs(attempt));
           continue;
         }
         this._trip(lastErr);
@@ -147,15 +180,22 @@ export class KarlancerClient {
   }
 
   /**
-   * Try multiple endpoint/payload pairs; first 2xx wins.
-   * Used for unverified mutation contracts (bid / send message).
+   * Discovery-only tryPost — FORBIDDEN for production bid/chat mutations.
+   * Safe for optional read-ish discovery (e.g. profile GET try-list uses GET, not this).
+   * @deprecated Do not use for bids.submit or messages.send.
    */
-  async tryPost(candidates, { label = 'tryPost' } = {}) {
+  async tryPost(candidates, { label = 'tryPost', allowMutationDiscovery = false } = {}) {
+    if (!allowMutationDiscovery) {
+      throw new KarlancerApiError(
+        'tryPost_forbidden',
+        `tryPost blocked for production mutations (label=${label}). Use VerifiedMutationContract.`
+      );
+    }
     const attempts = [];
     let lastError = null;
     for (const c of candidates) {
       try {
-        const res = await this.post(c.path, c.body, { retries: 0 });
+        const res = await this.post(c.path, c.body, { retries: 0, mutation: true });
         attempts.push({ path: c.path, status: res.status, ok: true, shape: c.shape });
         logger.info('tryPost_success', { label, path: c.path, shape: c.shape });
         return { ok: true, path: c.path, shape: c.shape, data: res.data, attempts };
@@ -173,8 +213,6 @@ export class KarlancerClient {
         if (status === 401 || status === 403) {
           return { ok: false, error: e, attempts, blocked: 'unauthorized' };
         }
-        if (status === 404) continue;
-        // 422: try next payload shape on same or next path
         continue;
       }
     }
@@ -185,6 +223,20 @@ export class KarlancerClient {
       blocked: 'unverified_contract',
     };
   }
+}
+
+function backoffMs(attempt) {
+  return 400 * 2 ** attempt + Math.floor(Math.random() * 200);
+}
+
+function sanitizeBody(body) {
+  if (!body || typeof body !== 'object') return body;
+  // Never echo potential secrets from upstream into errors
+  const clone = { ...body };
+  for (const k of Object.keys(clone)) {
+    if (/token|auth|cookie|password|secret/i.test(k)) clone[k] = '[REDACTED]';
+  }
+  return clone;
 }
 
 function sleep(ms) {
