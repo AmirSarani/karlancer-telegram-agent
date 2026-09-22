@@ -69,3 +69,42 @@ Owners can renew the session from **Settings → 🔐 تمدید نشست** with
 5. Password is never written to disk/DB/logs. Chat history may still retain copies — prefer rotating the Karlancer password if it was typed in Telegram.
 
 On API `401`/`403` from reads, owners get a rate-limited soft notify to renew from Settings.
+
+
+## Transport & secrets hardening (honest constraints)
+
+### What TLS covers
+
+| Hop | Protection |
+|-----|------------|
+| User ↔ Telegram clients | Telegram client protocols (MTProto for user apps) |
+| Bot process ↔ `api.telegram.org` | **HTTPS only** (Grammy default; optional `TELEGRAM_API_ROOT` must be `https://`) |
+| Agent ↔ `www.karlancer.com` | **HTTPS only** — `KARLANCER_BASE_URL` / client reject `http://` |
+| Agent ↔ OpenAI-compatible LLM | **HTTPS only** — `OPENAI_BASE_URL` rejects `http://` |
+
+### What is NOT end-to-end encrypted
+
+**Telegram Bot API messages are NOT E2E.** محتوایی که کاربر به ربات می‌فرستد (از جمله شماره/رمز هنگام تمدید نشست) روی سرورهای تلگرام قابل خواندن است. ما نمی‌توانیم روی بدنهٔ پیام‌های Bot API رمزنگاری واقعی E2E اضافه کنیم.
+
+این ایجنت فقط سخت‌سازی می‌کند: HTTPS خروجی، رمزنگاری موقت شماره در حافظهٔ فرایند، حذف پیام رمز در چت وقتی API اجازه دهد، و redaction لاگ — **نه** ادعای E2E.
+
+### Ephemeral re-login encryption
+
+- Phone (while awaiting password) is stored as AES-256-GCM ciphertext in an in-memory Map only (`TELEGRAM_SECRETS_KEY` or derived from bot token / credential secret).
+- Password is never written to disk/SQLite; used only for the HTTPS `POST /api/login/phone` call, then dropped.
+- Plaintext must never appear in logs (see `src/security/redaction.js`).
+
+### At-rest access token
+
+- `KARLANCER_ACCESS_TOKEN` lives in `.env` with mode `600` via `persistAccessToken` / install script.
+- Prefer **not** encrypting the systemd `EnvironmentFile` token further (would break `EnvironmentFile=` loading). Do not store the token in SQLite or logs.
+- Optional per-tenant ciphertext path remains `KARLANCER_CREDENTIAL_KEK` (see OPERATIONS.md).
+
+Generate secrets key on VPS (never print to chat):
+
+```bash
+# on VPS, as deploy user — value goes only into .env
+KEY=$(openssl rand -hex 32)
+# merge TELEGRAM_SECRETS_KEY=$KEY into /opt/karlancer-telegram-agent/.env (chmod 600)
+unset KEY
+```

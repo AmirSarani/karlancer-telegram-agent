@@ -5,13 +5,17 @@
 import { InlineKeyboard } from 'grammy';
 import { createAuthAdapter } from '../api/adapters/auth.js';
 import { persistAccessToken } from '../security/persist-access-token.js';
+import {
+  encryptEphemeral,
+  decryptEphemeral,
+} from '../security/ephemeral-secrets.js';
 
 /** @typedef {'await_phone'|'await_password'} ReloginPhase */
 
 /**
  * @typedef {object} ReloginState
  * @property {ReloginPhase} phase
- * @property {string} [phone]
+ * @property {string} [phoneCipher] AES-256-GCM blob only — never plaintext phone
  * @property {number} [phoneMessageId]
  * @property {number} [passwordMessageId]
  * @property {number} startedAt
@@ -82,7 +86,8 @@ export function clearReloginState(chatId) {
   const id = Number(chatId);
   const st = states.get(id);
   if (st) {
-    if (st.phone) st.phone = '';
+    if (st.phoneCipher) st.phoneCipher = '';
+    if (st.phone) st.phone = ''; // legacy field guard
     states.delete(id);
   }
 }
@@ -182,7 +187,15 @@ export async function handleReloginText({
       await ctx.reply(MSG.BAD_PHONE, { reply_markup: reloginCancelKeyboard() });
       return true;
     }
-    st.phone = phone;
+    try {
+      st.phoneCipher = encryptEphemeral(phone);
+    } catch {
+      logWarn('karlancer_relogin_encrypt_failed', { reason: 'phone' });
+      clearReloginState(chatId);
+      await ctx.reply(MSG.NETWORK, { reply_markup: reloginRetryKeyboard() });
+      return true;
+    }
+    st.phone = undefined;
     st.phoneMessageId = ctx.message?.message_id;
     st.phase = 'await_password';
     st.expiresAt = Date.now() + RELOGIN_TIMEOUT_MS;
@@ -193,7 +206,13 @@ export async function handleReloginText({
 
   if (st.phase === 'await_password') {
     const password = text;
-    const phone = st.phone;
+    let phone = null;
+    try {
+      if (st.phoneCipher) phone = decryptEphemeral(st.phoneCipher);
+      else if (st.phone) phone = st.phone; // legacy in-memory only
+    } catch {
+      phone = null;
+    }
     st.passwordMessageId = ctx.message?.message_id;
     await tryDeleteMessage(ctx, st.passwordMessageId);
     await tryDeleteMessage(ctx, st.phoneMessageId);
@@ -209,6 +228,8 @@ export async function handleReloginText({
       const auth = createAuthAdapter(api.client);
       const result = await auth.loginWithPhone({ phone, password });
       const token = result.accessToken;
+      // Drop plaintext refs ASAP (JS strings immutable; clear locals after persist path)
+      phone = '';
 
       const persisted = persistAccessToken(token, {
         client: api.client,

@@ -22,3 +22,7 @@ Trust boundaries: MCP host → MCP server → adapters → Karlancer → SQLite 
 - Tenant id `default` is **not** a wildcard / super-admin. It is scoped exactly like any other tenant.
 - Cross-tenant job/approval/memory/audit access requires explicit scope `cross_tenant_admin` or `super_admin`.
 - Intelligence (`getInsight` / feedback / pricing memory) is tenant-scoped; feedback from tenant-b must not appear in default or tenant-a.
+
+## Transport honesty
+
+Outbound Karlancer/Telegram/LLM bases must be HTTPS. Bot chat content is **not** E2E — see `docs/SECURITY.md` and `docs/AUTH_FLOW.md`.

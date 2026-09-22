@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -27,6 +27,15 @@ import {
 } from '../../src/telegram/ui.js';
 import { resolveOwnerChatIds, isOwnerContext } from '../../src/telegram/bot.js';
 import { KarlancerApiError } from '../../src/api/errors.js';
+import crypto from 'node:crypto';
+const _prevSecretsKey = process.env.TELEGRAM_SECRETS_KEY;
+before(() => {
+  process.env.TELEGRAM_SECRETS_KEY = crypto.randomBytes(32).toString('hex');
+});
+after(() => {
+  if (_prevSecretsKey == null) delete process.env.TELEGRAM_SECRETS_KEY;
+  else process.env.TELEGRAM_SECRETS_KEY = _prevSecretsKey;
+});
 
 test('normalizePhone accepts IR mobiles and rejects junk', () => {
   assert.equal(normalizePhone('0912-345-6789'), '09123456789');
@@ -68,9 +77,29 @@ test('settings UX exposes relogin callback and help warns about Telegram history
   assert.deepEqual(parseCallbackData('set:relogin:cancel'), { type: 'set_relogin_cancel' });
   const card = formatSettingsCard({ state: 'running', karlancerAuth: false });
   assert.match(card, /تمدید نشست/);
+  assert.match(card, /ارتباط‌ها روی HTTPS/);
   const help = formatHelp();
   assert.match(help, /تمدید نشست/);
   assert.match(help, /تاریخچه|نگه ندارید/);
+  assert.match(help, /HTTPS/);
+  assert.match(help, /E2E/);
+});
+
+test('relogin stores phone as ciphertext only (no plaintext in state)', async () => {
+  _resetReloginForTests();
+  const chatId = 999001;
+  beginRelogin(chatId);
+  const replies = [];
+  const deleted = [];
+  await handleReloginText({
+    ctx: mockCtx(chatId, '09123334455', 5, replies, deleted),
+    api: { client: {} },
+  });
+  const st = getReloginState(chatId);
+  assert.equal(st.phase, 'await_password');
+  assert.ok(st.phoneCipher);
+  assert.equal(st.phone, undefined);
+  assert.equal(JSON.stringify(st).includes('09123334455'), false);
 });
 
 test('extractAccessToken reads Sanctum-style payload', () => {

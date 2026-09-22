@@ -23,3 +23,17 @@ test('api key scopes', () => {
   assert.equal(authorizeApiKey(reg, 'wrong', 'read').ok, false);
   assert.equal(hashApiKey(key).length, 64);
 });
+
+test('redacts phone and password patterns in strings', () => {
+  const out = redactDeep({
+    note: 'user 09121234567 password=SuperSecret',
+    Authorization: 'Bearer abc.def',
+    dump: 'Authorization: Bearer xyz|tok',
+  });
+  assert.equal(out.Authorization, '[REDACTED]');
+  assert.match(out.note, /\[REDACTED_PHONE\]/);
+  assert.match(out.note, /password=\[REDACTED\]/i);
+  assert.match(out.dump, /\[REDACTED\]/);
+  assert.equal(out.note.includes('09121234567'), false);
+  assert.equal(out.note.includes('SuperSecret'), false);
+});

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertHttpsOnlyUrl } from './security/redaction.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -17,6 +18,16 @@ function optional(name, fallback = '') {
   return v != null && String(v).trim() !== '' ? String(v).trim() : fallback;
 }
 
+/**
+ * Parse and require https:// for outbound HTTP client base URLs.
+ * @param {string} name
+ * @param {string} raw
+ */
+function httpsBaseUrl(name, raw) {
+  const cleaned = String(raw || '').trim().replace(/\/$/, '');
+  assertHttpsOnlyUrl(name, cleaned);
+  return cleaned;
+}
 
 /**
  * Parse TELEGRAM_OWNER_CHAT_ID as one id or comma-separated allowlist.
@@ -63,16 +74,33 @@ export function loadAppConfig(opts = {}) {
     );
   }
 
+  const karlancerBaseUrl = httpsBaseUrl(
+    'KARLANCER_BASE_URL',
+    optional('KARLANCER_BASE_URL', 'https://www.karlancer.com')
+  );
+  const openaiBaseUrl = httpsBaseUrl(
+    'OPENAI_BASE_URL',
+    optional('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+  );
+
+  // Optional override for Grammy; default api.telegram.org is always HTTPS.
+  const telegramApiRootRaw = optional('TELEGRAM_API_ROOT', '');
+  const telegramApiRoot = telegramApiRootRaw
+    ? httpsBaseUrl('TELEGRAM_API_ROOT', telegramApiRootRaw)
+    : '';
+
   return {
     root,
     telegramBotToken,
     telegramOwnerChatId,
     telegramOwnerChatIds,
+    telegramApiRoot,
+    telegramSecretsKeyConfigured: Boolean(optional('TELEGRAM_SECRETS_KEY')),
     openaiApiKey: optional('OPENAI_API_KEY'),
-    openaiBaseUrl: optional('OPENAI_BASE_URL', 'https://api.openai.com/v1').replace(/\/$/, ''),
+    openaiBaseUrl,
     openaiModel: optional('OPENAI_MODEL', 'gpt-4o-mini'),
     openaiLargeModel: optional('OPENAI_LARGE_MODEL', optional('OPENAI_MODEL', 'gpt-4o-mini')),
-    karlancerBaseUrl: optional('KARLANCER_BASE_URL', 'https://www.karlancer.com').replace(/\/$/, ''),
+    karlancerBaseUrl,
     karlancerAccessToken: optional('KARLANCER_ACCESS_TOKEN'),
     karlancerCookie: optional('KARLANCER_COOKIE'),
     karlancerTimeoutMs: Number(optional('KARLANCER_TIMEOUT_MS', '30000')) || 30000,
