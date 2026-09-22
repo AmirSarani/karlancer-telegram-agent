@@ -1,11 +1,11 @@
 /**
- * Owner-only Telegram notify helper (no long-poll). Secrets never logged.
+ * Owner Telegram (+ optional Bale) notify helpers. Secrets never logged.
  */
 import { Bot } from 'grammy';
 import { redactString } from '../security/redaction.js';
 
 /**
- * Send one message to the owner chat.
+ * Send one message to a single chat.
  * @param {object} opts
  * @param {string} opts.token
  * @param {number|string} opts.chatId
@@ -32,6 +32,34 @@ export async function notifyOwner({ token, chatId, text, reply_markup } = {}) {
   }
 }
 
+/**
+ * Notify every owner chat id (deduped). Partial failures reported.
+ * @param {object} opts
+ * @param {string} opts.token
+ * @param {Array<number|string>} opts.chatIds
+ * @param {string} opts.text
+ * @param {object} [opts.reply_markup]
+ * @returns {Promise<{ ok: boolean, sent: number, failed: number, errors: string[] }>}
+ */
+export async function notifyAllOwners({ token, chatIds, text, reply_markup } = {}) {
+  const ids = [...new Set((Array.isArray(chatIds) ? chatIds : []).filter((id) => id != null && id !== ''))];
+  if (!token || !ids.length) {
+    return { ok: false, sent: 0, failed: 0, errors: ['missing_config'] };
+  }
+  let sent = 0;
+  let failed = 0;
+  /** @type {string[]} */
+  const errors = [];
+  for (const chatId of ids) {
+    const res = await notifyOwner({ token, chatId, text, reply_markup });
+    if (res.ok) sent += 1;
+    else {
+      failed += 1;
+      if (res.error) errors.push(res.error);
+    }
+  }
+  return { ok: sent > 0, sent, failed, errors };
+}
 
 /**
  * Edit an existing owner message (for scan loading → result).
@@ -57,4 +85,3 @@ export async function editOwnerMessage({ token, chatId, messageId, text, reply_m
 }
 
 export default notifyOwner;
-

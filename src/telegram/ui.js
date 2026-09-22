@@ -218,6 +218,8 @@ export function settingsInlineKeyboard(agentState = 'running', exec = {}) {
     .text('🔐 تمدید نشست', 'set:relogin')
     .text('🎚 سوئیچ‌ها', 'nav:toggles')
     .row()
+    .text('🏆 پس از برد', 'nav:postwin')
+    .row()
     .text('⬅️ بازگشت', 'nav:dash')
     .text('🏠 خانه', 'nav:home')
     .row()
@@ -300,7 +302,10 @@ export function parseCallbackData(data) {
   if (data === 'set:resume') return { type: 'set_resume' };
   if (data === 'set:scan') return { type: 'set_scan' };
   if (data === 'set:relogin') return { type: 'set_relogin' };
+  if (data === 'set:relogin:token') return { type: 'set_relogin_token' };
+  if (data === 'set:relogin:password') return { type: 'set_relogin_password' };
   if (data === 'set:relogin:cancel') return { type: 'set_relogin_cancel' };
+  if (data === 'nav:postwin') return { type: 'nav_postwin' };
   if (data === 'set:emerg') return { type: 'set_emergency' };
   if (data === 'set:emerg_clear') return { type: 'set_emergency_clear' };
   if (data === 'nav:rules') return { type: 'nav_rules' };
@@ -560,7 +565,9 @@ export function formatSettingsCard(s = {}) {
     'دکمه‌ها: دستی / کمکی / خودکار · قوانین خودکار · توقف اضطراری',
     'پیش‌فرض: دستی — خودکار فقط با قانون و سقف روزانه.',
     '• ارتباط‌ها روی HTTPS',
+    '• تمدید نشست: ترجیحاً توکن مرورگر (بدون رمز در چت)',
     '⚠️ رمز عبور را در تلگرام نگه ندارید؛ پس از ورود پیام‌ها را پاک کنید.',
+    '• پیشنهاد خودکار زنده فقط اگر ALLOW_LIVE_AUTO_BID=true',
   ];
   return lines.join('\n');
 }
@@ -816,7 +823,7 @@ export function formatHelp() {
     '',
     'عملیات حساس فقط بعد از تأیید شما اجرا می‌شود.',
     '',
-    'تمدید نشست کارلنسر از تنظیمات (فقط مالک).',
+    'تمدید نشست: ترجیحاً چسباندن توکن مرورگر؛ رمز فقط به‌عنوان پشتیبان (فقط مالک).',
     'ارتباط‌ها روی HTTPS (کارلنسر و API تلگرام).',
     'رمز/توکن را در چت نگه ندارید؛ تلگرام ممکن است تاریخچه نگه دارد.',
     'توجه: پیام‌های ربات تلگرام E2E نیستند — سرور تلگرام می‌تواند محتوا را ببیند.',

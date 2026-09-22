@@ -45,3 +45,21 @@ Karlancer API (projects.search / rooms+messages invites)
 ## Audit
 
 Every decision is written to `opportunity_decisions` and mirrored to `audit_log` (`tool=opportunity_decision`) with `projectId`, `score`, `matchedRules`, `decision`, `mode`, timestamp.
+
+
+## Live auto-bid safety (Phase 7)
+
+`ALLOW_LIVE_AUTO_BID` defaults to **false**.
+
+When false (VPS default):
+
+- Scanner may still decide `AUTO_EXECUTE` after rules + PermissionGate
+- Side effects **force HITL approval cards** / dry-run (`forceRequireApproval=true`)
+- No live `bids.submit` POST is auto-approved solely by the scanner
+
+When true **and** VerifiedMutationContract present **and** gate `auto_allow` **and** under daily limit **and** past `approvalPreviewFirstN`:
+
+- Limited auto enqueue with `auto:permission_gate` approval actor
+- Soft-fail if contract missing (no crash; approval/dry path)
+
+Never unlimited. Emergency stop / toggles / blacklist still apply.

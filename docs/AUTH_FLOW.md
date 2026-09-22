@@ -108,3 +108,18 @@ KEY=$(openssl rand -hex 32)
 # merge TELEGRAM_SECRETS_KEY=$KEY into /opt/karlancer-telegram-agent/.env (chmod 600)
 unset KEY
 ```
+
+
+## Preferred reauth (Phase 6) — browser token paste
+
+Telegram Bot API is **not** E2E. Prefer **not** typing the Karlancer password in chat.
+
+1. Settings → **🔐 تمدید نشست**
+2. Choose **📋 توکن مرورگر** (recommended)
+3. From logged-in browser: DevTools → Application → Local Storage → `auth-token` → copy `access_token`
+4. Paste **only** that token in the bot; message is deleted when possible
+5. Fallback **⚠️ ورود با رمز** keeps the phone/password flow with an explicit warning
+
+### Session health
+
+`src/security/session-health.js` periodically probes `GET /api/profile` (dashboard/me fallback). On 401, **all** owner chat ids are notified (cooldown 30m) with CTA to renew via token paste.

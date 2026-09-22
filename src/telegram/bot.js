@@ -72,16 +72,20 @@ import { buildSmartBid } from '../opportunity/smart-bid.js';
 import { createFeedbackStore } from '../opportunity/feedback.js';
 import { createWizardState } from './wizard-state.js';
 import { checkTokenHealth, formatTokenWarningFa } from '../security/token-health.js';
+import { formatPostWinSectionFa, scanNotificationsForWins, advancePostWin } from '../opportunity/post-win.js';
 
 import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
 import {
   beginRelogin,
+  beginTokenPaste,
+  beginPasswordFallback,
   clearReloginState,
   getReloginState,
   handleReloginText,
   MSG as RELOGIN_MSG,
   reloginCancelKeyboard,
+  reloginChoiceKeyboard,
 } from './relogin-flow.js';
 
 /**
@@ -461,8 +465,14 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
         authOk: api?.client ? Boolean(api.client.hasAuth) : null,
         envFile: hooks.envFile || null,
       });
+      if (th.ageDays != null) {
+        text += `\n• سن تقریبی توکن: ${Math.floor(th.ageDays)} روز`;
+      }
       const warn = formatTokenWarningFa(th);
       if (warn) text += `\n\n⚠️ ${warn}`;
+      else if (th.healthy === false) {
+        text += '\n\n⚠️ نشست نامعتبر — تمدید با توکن مرورگر پیشنهاد می‌شود.';
+      }
     } catch {
       /* ignore */
     }
@@ -606,6 +616,36 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
 
   async function startReloginFlow(ctx, { edit = false } = {}) {
     beginRelogin(ctx.chat.id);
+    const text = RELOGIN_MSG.ASK_CHOICE;
+    const reply_markup = reloginChoiceKeyboard();
+    if (edit && ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, { reply_markup });
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    await ctx.reply(text, { reply_markup });
+  }
+
+  async function startTokenPasteFlow(ctx, { edit = false } = {}) {
+    beginTokenPaste(ctx.chat.id);
+    const text = RELOGIN_MSG.ASK_TOKEN;
+    const reply_markup = reloginCancelKeyboard();
+    if (edit && ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, { reply_markup });
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    await ctx.reply(text, { reply_markup });
+  }
+
+  async function startPasswordFallbackFlow(ctx, { edit = false } = {}) {
+    beginPasswordFallback(ctx.chat.id);
     const text = RELOGIN_MSG.ASK_PHONE;
     const reply_markup = reloginCancelKeyboard();
     if (edit && ctx.callbackQuery) {
@@ -617,6 +657,30 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       }
     }
     await ctx.reply(text, { reply_markup });
+  }
+
+  async function replyPostWin(ctx, { edit = false } = {}) {
+    let state = null;
+    try {
+      if (api?.notifications?.list) {
+        const listed = await api.notifications.list({ page: 1 });
+        const { wins } = scanNotificationsForWins(listed.notifications || []);
+        if (wins[0]) {
+          state = advancePostWin(wins[0].state, {
+            projectTitle: wins[0].notification?.title,
+          });
+        }
+      }
+    } catch {
+      /* soft — show empty scaffold */
+    }
+    const text = formatPostWinSectionFa(state);
+    await editOrReply(
+      ctx,
+      text,
+      { reply_markup: settingsInlineKeyboard(runtime.state, gate ? gate.settings.get() : {}) },
+      { edit }
+    );
   }
 
   async function replyHelp(ctx, { edit = false } = {}) {
@@ -977,6 +1041,7 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       mutations,
       tenantId: 'default',
       notify: notifyFn,
+      allowLiveAutoBid: Boolean(hooks.allowLiveAutoBid),
     });
   }
 
@@ -1630,10 +1695,28 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       return;
     }
 
+    if (parsed.type === 'set_relogin_token') {
+      await ctx.answerCallbackQuery({ text: 'توکن مرورگر…' });
+      await startTokenPasteFlow(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_relogin_password') {
+      await ctx.answerCallbackQuery({ text: 'ورود با رمز…' });
+      await startPasswordFallbackFlow(ctx, { edit: true });
+      return;
+    }
+
     if (parsed.type === 'set_relogin_cancel') {
       clearReloginState(ctx.chat?.id);
       await ctx.answerCallbackQuery({ text: 'لغو شد' });
       await ctx.reply(RELOGIN_MSG.CANCELLED, menuOpts());
+      return;
+    }
+
+    if (parsed.type === 'nav_postwin') {
+      await ctx.answerCallbackQuery();
+      await replyPostWin(ctx, { edit: true });
       return;
     }
 

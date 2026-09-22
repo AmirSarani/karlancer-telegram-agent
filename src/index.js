@@ -12,7 +12,11 @@ import { createScheduler } from './worker/scheduler.js';
 import { createMorningDigest } from './opportunity/morning-digest.js';
 import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
-import { notifyOwner, editOwnerMessage } from './telegram/notify.js';
+import { notifyOwner, notifyAllOwners, editOwnerMessage } from './telegram/notify.js';
+import { notifyBaleOwners } from './telegram/bale-notify.js';
+import { createSessionHealthMonitor } from './security/session-health.js';
+import { createPermissionGate } from './telegram/permission-gate.js';
+import { createMutationRequester } from './telegram/mutation-request.js';
 import { maybeNotifySessionExpired } from './telegram/relogin-flow.js';
 import { formatScanSummary, afterScanInlineKeyboard, buildScanResultMessage } from './telegram/ui.js';
 import { formatRoomCard, roomCardKeyboard } from './telegram/room-card.js';
@@ -127,16 +131,20 @@ async function main() {
       }
       logger.warn('telegram_scan_edit_failed', { error: edited.error });
     }
-    const res = await notifyOwner({
+    const res = await notifyAllOwners({
       token: config.telegramBotToken,
-      chatId: config.telegramOwnerChatId,
+      chatIds: config.telegramOwnerChatIds || [config.telegramOwnerChatId],
       text,
       reply_markup,
     });
     if (!res.ok) {
-      logger.warn('telegram_scan_notify_failed', { error: res.error });
+      logger.warn('telegram_scan_notify_failed', { error: res.errors?.[0] });
     } else {
-      logger.info('telegram_scan_notified', { page: summary.page, unread: summary.unreadOnPage });
+      logger.info('telegram_scan_notified', {
+        page: summary.page,
+        unread: summary.unreadOnPage,
+        sent: res.sent,
+      });
     }
   }
 
@@ -156,19 +164,65 @@ async function main() {
         notifiedMsgIds.delete(first);
       }
       const text = formatRoomCard({ ...card, sendApiLive: Boolean(card.sendApiLive) });
-      const res = await notifyOwner({
+      const res = await notifyAllOwners({
         token: config.telegramBotToken,
-        chatId: config.telegramOwnerChatId,
+        chatIds: config.telegramOwnerChatIds || [config.telegramOwnerChatId],
         text,
         reply_markup: roomCardKeyboard(card.roomId),
       });
       if (!res.ok) {
-        logger.warn('telegram_room_card_notify_failed', { roomId: card.roomId, error: res.error });
+        logger.warn('telegram_room_card_notify_failed', { roomId: card.roomId, error: res.errors?.[0] });
       } else {
-        logger.info('telegram_room_card_notified', { roomId: card.roomId, fresh: card.freshInboundCount });
+        logger.info('telegram_room_card_notified', {
+          roomId: card.roomId,
+          fresh: card.freshInboundCount,
+          sent: res.sent,
+        });
       }
     }
   }
+
+
+  const gate = createPermissionGate(db);
+  const mutations = createMutationRequester({ queue, gate });
+
+  async function notifyAllOwnersChannels(text, reply_markup) {
+    const chatIds = config.telegramOwnerChatIds || [];
+    let tg = { ok: false, sent: 0 };
+    if (config.enableTelegram && config.telegramBotToken && chatIds.length) {
+      tg = await notifyAllOwners({
+        token: config.telegramBotToken,
+        chatIds,
+        text,
+        reply_markup,
+      });
+      if (!tg.ok) {
+        logger.warn('telegram_notify_all_failed', { failed: tg.failed, errors: tg.errors?.slice?.(0, 2) });
+      }
+    }
+    if (config.baleBotToken) {
+      const bale = await notifyBaleOwners({
+        token: config.baleBotToken,
+        chatIds: config.baleOwnerChatIds?.length ? config.baleOwnerChatIds : chatIds,
+        text,
+        apiRoot: config.baleApiRoot,
+      });
+      if (!bale.skipped && !bale.ok) {
+        logger.warn('bale_notify_failed', { error: bale.error });
+      }
+    }
+    return tg;
+  }
+
+  let sessionHealthPaused = false;
+  const sessionHealth = createSessionHealthMonitor({
+    api,
+    envFile: path.join(config.root, '.env'),
+    notifyAllOwners: async (text) => {
+      await notifyAllOwnersChannels(text);
+    },
+    isPaused: () => sessionHealthPaused,
+  });
 
   const worker = createWorker({
     db,
@@ -176,6 +230,11 @@ async function main() {
     api,
     llm,
     budget,
+    mutations,
+    notifyOpportunity: async (text) => {
+      await notifyAllOwnersChannels(text);
+    },
+    allowLiveAutoBid: Boolean(config.allowLiveAutoBid),
     leaseMs: 60_000,
     pollMs: 500,
     onEvent: async (type, payload) => {
@@ -198,13 +257,7 @@ async function main() {
         try {
           const { formatOpportunityScanResult } = await import('./telegram/opportunity-ux.js');
           const text = formatOpportunityScanResult(payload);
-          if (config.enableTelegram && config.telegramBotToken && config.telegramOwnerChatId != null) {
-            await notifyOwner({
-              token: config.telegramBotToken,
-              chatId: config.telegramOwnerChatId,
-              text,
-            });
-          }
+          await notifyAllOwnersChannels(text);
         } catch (e) {
           logger.warn('opportunity_scan_notify_failed', { err: e.message });
         }
@@ -230,6 +283,7 @@ async function main() {
       ownerChatIds: config.telegramOwnerChatIds,
       hooks: {
         envFile: path.join(config.root, '.env'),
+        allowLiveAutoBid: Boolean(config.allowLiveAutoBid),
         onScanMessage: (info) => {
           pendingScanUi = info;
         },
@@ -309,12 +363,7 @@ async function main() {
     const morningDigest = createMorningDigest({
       db,
       notify: async (text) => {
-        if (!config.telegramBotToken || config.telegramOwnerChatId == null) return;
-        await notifyOwner({
-          token: config.telegramBotToken,
-          chatId: config.telegramOwnerChatId,
-          text,
-        });
+        await notifyAllOwnersChannels(text);
       },
       auth: {
         hasAuth: Boolean(api.client.hasAuth),
@@ -325,12 +374,26 @@ async function main() {
     });
     morningDigest.start(60_000);
 
+    sessionHealth.start(15 * 60_000);
+    setInterval(() => {
+      try {
+        sessionHealthPaused = runtime.state === 'paused';
+      } catch {
+        /* ignore */
+      }
+    }, 5_000).unref?.();
+
     const shutdown = async (signal) => {
       logger.info('main_shutdown', { signal });
       await worker.stop();
       scheduler.stop();
       try {
         morningDigest.stop();
+      } catch {
+        /* ignore */
+      }
+      try {
+        sessionHealth.stop();
       } catch {
         /* ignore */
       }
@@ -354,6 +417,8 @@ async function main() {
       owners: config.telegramOwnerChatIds ?? [],
       auth: api.client.hasAuth,
       db: config.dbPath,
+      allowLiveAutoBid: Boolean(config.allowLiveAutoBid),
+      bale: Boolean(config.baleBotToken),
     });
     await start();
   } else {

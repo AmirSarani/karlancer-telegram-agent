@@ -113,6 +113,11 @@ export function loadAppConfig(opts = {}) {
     enableTelegram,
     enableWorker: optional('ENABLE_WORKER', 'true').toLowerCase() !== 'false',
     dailyTokenLimit: Number(optional('DAILY_TOKEN_LIMIT', '200000')) || 200000,
+    /** Live auto-bid POST. Default false — scanner enqueues approval cards / dry-run only. */
+    allowLiveAutoBid: optional('ALLOW_LIVE_AUTO_BID', 'false').toLowerCase() === 'true',
+    baleBotToken: optional('BALE_BOT_TOKEN'),
+    baleOwnerChatIds: parseTelegramOwnerChatIds(optional('BALE_OWNER_CHAT_IDS') || optional('TELEGRAM_OWNER_CHAT_ID')),
+    baleApiRoot: optional('BALE_API_ROOT', 'https://tapi.bale.ai'),
   };
 }
 

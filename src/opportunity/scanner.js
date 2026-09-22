@@ -16,6 +16,7 @@ import {
   getTodayAutoCounts,
 } from '../telegram/agent-settings.js';
 import { createPermissionGate } from '../telegram/permission-gate.js';
+import { getVerifiedMutation } from '../api/contracts/verified-mutation.js';
 
 /**
  * @param {object} deps
@@ -26,7 +27,14 @@ import { createPermissionGate } from '../telegram/permission-gate.js';
  * @param {(text: string, meta?: object) => Promise<void>|void} [deps.notify]
  */
 export function createOpportunityScanner(deps) {
-  const { db, api, mutations = null, tenantId = 'default', notify = null } = deps;
+  const {
+    db,
+    api,
+    mutations = null,
+    tenantId = 'default',
+    notify = null,
+    allowLiveAutoBid = false,
+  } = deps;
 
   ensureOpportunitySchema(db);
   const store = createOpportunityStore(db, { tenantId });
@@ -263,6 +271,7 @@ export function createOpportunityScanner(deps) {
           settings,
           profile,
           todayCounts,
+          allowLiveAutoBid,
         });
         if (decisionOut.decision === 'NOTIFY') results.notified += 1;
         if (decisionOut.decision === 'CREATE_DRAFT') results.drafts += 1;
@@ -436,6 +445,7 @@ async function applySideEffects({
   settings,
   profile,
   todayCounts,
+  allowLiveAutoBid = false,
 }) {
   const { opportunity: opp, score, reasons, decision } = card;
   const shouldNotify =
@@ -468,48 +478,75 @@ async function applySideEffects({
 
     // Limited real AUTO_EXECUTE: first N of the day still force HITL preview.
     // Never unlimited — gate + toggles + daily limits already enforced in decideOpportunity.
+    // ALLOW_LIVE_AUTO_BID default false → dry-run / approval cards only (no live POST via auto).
     const previewN = settings?.approvalPreviewFirstN ?? 3;
     const autoSoFar = (todayCounts?.bids || 0) + (todayCounts?.messages || 0);
+    const liveAllowed = allowLiveAutoBid === true;
+    const contract = getVerifiedMutation('bids.submit');
+    const contractMissing = !contract;
+
     const forceRequireApproval =
       decision === 'REQUEST_APPROVAL' ||
       decisionOut.mockAutoExecute === true ||
       autoSoFar < previewN ||
-      Boolean(settings?.emergencyStop);
+      Boolean(settings?.emergencyStop) ||
+      !liveAllowed ||
+      contractMissing;
 
-    const result = mutations.request({
-      action: 'bids.submit',
-      payload: {
+    let result;
+    try {
+      result = mutations.request({
+        action: 'bids.submit',
+        payload: {
+          projectId: opp.id,
+          proposalText: smart.text,
+          price,
+          days,
+          mockAutoExecute: decision === 'AUTO_EXECUTE' && forceRequireApproval,
+          limitedAutoExecute: decision === 'AUTO_EXECUTE' && !forceRequireApproval && liveAllowed,
+          dryRun: !liveAllowed,
+          contractMissing,
+          opportunityScore: score,
+          smartBid: true,
+        },
+        gateCtx: {
+          source: 'auto',
+          projectId: opp.id,
+          matchScore: score,
+          confidence: score,
+          budget: opp.budgetMax ?? opp.budgetMin,
+          category: opp.category,
+          hasExistingBid: false,
+          riskHint: 'high',
+        },
+        requestedBy: 'opportunity_scanner',
+        targetRef: String(opp.id),
+        forceRequireApproval,
+        idempotencyKey: `opp-bid:${opp.id}:${decision}`,
+      });
+    } catch (e) {
+      // Soft-fail if contract/mutation path throws
+      logger.warn('opportunity_auto_bid_soft_fail', {
         projectId: opp.id,
-        proposalText: smart.text,
-        price,
-        days,
-        mockAutoExecute: decision === 'AUTO_EXECUTE' && forceRequireApproval,
-        limitedAutoExecute: decision === 'AUTO_EXECUTE' && !forceRequireApproval,
-        opportunityScore: score,
-        smartBid: true,
-      },
-      gateCtx: {
-        source: 'auto',
-        projectId: opp.id,
-        matchScore: score,
-        confidence: score,
-        budget: opp.budgetMax ?? opp.budgetMin,
-        category: opp.category,
-        hasExistingBid: false,
-        riskHint: 'high',
-      },
-      requestedBy: 'opportunity_scanner',
-      targetRef: String(opp.id),
-      forceRequireApproval,
-      idempotencyKey: `opp-bid:${opp.id}:${decision}`,
-    });
+        err: e?.message || String(e),
+        contractMissing,
+      });
+      return {
+        enqueued: false,
+        softFail: true,
+        contractMissing,
+        forceRequireApproval: true,
+      };
+    }
 
     void decisionOut;
     return {
       enqueued: true,
-      autoExecuted: Boolean(result?.autoExecuted),
-      pendingApproval: Boolean(result?.pendingApproval),
+      autoExecuted: Boolean(result?.autoExecuted) && liveAllowed && !contractMissing,
+      pendingApproval: Boolean(result?.pendingApproval) || forceRequireApproval,
       forceRequireApproval,
+      dryRun: !liveAllowed,
+      contractMissing,
     };
   }
   return {};

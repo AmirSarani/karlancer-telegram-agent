@@ -42,3 +42,6 @@ Do not re-implement business logic in the extension; feed evidence into adapters
 - `docs/TELEGRAM_EXECUTION_MODES.md` — Manual / Assisted / Auto
 - `docs/AUTOMATION_FLOW.md` — scan → decide → gate
 - `scripts/rotate-secrets.md` — manual secret rotation
+
+- `docs/PLAN2_LITE.md` — post-win scaffold (HITL)
+- `docs/BALE_NOTIFY.md` — optional Bale fan-out

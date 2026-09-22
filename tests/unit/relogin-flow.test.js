@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   beginRelogin,
+  beginPasswordFallback,
   clearReloginState,
   getReloginState,
   handleReloginText,
@@ -45,12 +46,12 @@ test('normalizePhone accepts IR mobiles and rejects junk', () => {
   assert.equal(normalizePhone(''), null);
 });
 
-test('relogin state machine: begin → await_phone; clear; timeout', async () => {
+test('relogin state machine: begin → await_choice; clear; timeout', async () => {
   _resetReloginForTests();
   const chatId = 1366010187;
   beginRelogin(chatId, 50);
   const st = getReloginState(chatId);
-  assert.equal(st.phase, 'await_phone');
+  assert.equal(st.phase, 'await_choice');
   assert.equal(_reloginStateSizeForTests(), 1);
   clearReloginState(chatId);
   assert.equal(getReloginState(chatId), null);
@@ -88,7 +89,7 @@ test('settings UX exposes relogin callback and help warns about Telegram history
 test('relogin stores phone as ciphertext only (no plaintext in state)', async () => {
   _resetReloginForTests();
   const chatId = 999001;
-  beginRelogin(chatId);
+  beginPasswordFallback(chatId);
   const replies = [];
   const deleted = [];
   await handleReloginText({
@@ -151,7 +152,7 @@ function mockCtx(chatId, text, messageId, replies, deleted) {
 test('handleReloginText happy path mocks login; never puts password in replies/logs', async () => {
   _resetReloginForTests();
   const chatId = 1773932361;
-  beginRelogin(chatId);
+  beginPasswordFallback(chatId);
   const replies = [];
   const logs = [];
   const deleted = [];
@@ -225,7 +226,7 @@ test('handleReloginText happy path mocks login; never puts password in replies/l
 test('handleReloginText wrong password stays in flow with Persian error', async () => {
   _resetReloginForTests();
   const chatId = 42;
-  beginRelogin(chatId);
+  beginPasswordFallback(chatId);
   const replies = [];
   const deleted = [];
   const api = {

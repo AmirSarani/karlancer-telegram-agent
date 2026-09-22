@@ -10,6 +10,7 @@ export const OPP_STATES = Object.freeze([
   'IGNORED',
   'ACTION_CREATED',
   'SUBMITTED',
+  'WON',
 ]);
 
 export const OPP_ACTIONS = Object.freeze([

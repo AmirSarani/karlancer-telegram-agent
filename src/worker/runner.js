@@ -13,6 +13,10 @@ import { bumpHandoffMeta } from '../memory/handoff.js';
 import { createScheduler } from './scheduler.js';
 import { createLlmProvider, recordTokenUsage } from '../llm/provider.js';
 import { TokenBudgetManager } from '../intelligence/token-budget.js';
+import { createPermissionGate } from '../telegram/permission-gate.js';
+import { createMutationRequester } from '../telegram/mutation-request.js';
+import { notifyAllOwners } from '../telegram/notify.js';
+import { notifyBaleOwners } from '../telegram/bale-notify.js';
 
 export function createWorker(ctx) {
   const workerId = ctx.workerId || `worker-${crypto.randomUUID().slice(0, 8)}`;
@@ -167,12 +171,31 @@ if (isMain) {
     largeModel: config.openaiLargeModel || config.openaiModel,
     onUsage: (u) => recordTokenUsage(db, u),
   });
+  const gate = createPermissionGate(db);
+  const mutations = createMutationRequester({ queue, gate });
+  async function notifyOpportunity(text) {
+    const ids = config.telegramOwnerChatIds || [];
+    if (config.telegramBotToken && ids.length) {
+      await notifyAllOwners({ token: config.telegramBotToken, chatIds: ids, text });
+    }
+    if (config.baleBotToken) {
+      await notifyBaleOwners({
+        token: config.baleBotToken,
+        chatIds: config.baleOwnerChatIds?.length ? config.baleOwnerChatIds : ids,
+        text,
+        apiRoot: config.baleApiRoot,
+      });
+    }
+  }
   const worker = createWorker({
     db,
     queue,
     api,
     llm,
     budget,
+    mutations,
+    notifyOpportunity,
+    allowLiveAutoBid: Boolean(config.allowLiveAutoBid),
     leaseMs: 60_000,
     pollMs: 400,
     onEvent: async (type, payload) => {
