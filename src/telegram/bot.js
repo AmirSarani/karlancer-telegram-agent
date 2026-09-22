@@ -21,6 +21,8 @@ import {
   formatChatAiModeCard,
   chatAiModeInlineKeyboard,
   chatAiModeLabelFa,
+  toggleConfirmKeyboard,
+  formatToggleConfirmCard,
   formatRulesCard,
   formatTogglesCard,
   formatEmergencyCard,
@@ -494,6 +496,7 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       state: runtime.state,
       karlancerAuth: api?.client ? Boolean(api.client.hasAuth) : null,
       executionMode: exec.mode || 'manual',
+      chatAiMode: exec.chatAiMode || 'full_manual',
       emergencyStop: Boolean(exec.emergencyStop),
       toggles: exec.toggles || {},
       liveAutoBid,
@@ -526,6 +529,8 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     const exec = gate ? gate.settings.get() : { chatAiMode: 'full_manual' };
     const text = formatChatAiModeCard({
       chatAiMode: exec.chatAiMode || 'full_manual',
+      executionMode: exec.mode || 'manual',
+      toggles: exec.toggles || {},
       emergencyStop: exec.emergencyStop,
     });
     const extra = { reply_markup: chatAiModeInlineKeyboard(exec.chatAiMode || 'full_manual') };
@@ -544,7 +549,11 @@ async function replyMode(ctx, { edit = false } = {}) {
     const exec = gate ? gate.settings.get() : { mode: 'manual' };
     await editOrReply(
       ctx,
-      formatModeCard({ executionMode: exec.mode, emergencyStop: exec.emergencyStop }),
+      formatModeCard({
+        executionMode: exec.mode,
+        emergencyStop: exec.emergencyStop,
+        toggles: exec.toggles || {},
+      }),
       { reply_markup: modeInlineKeyboard(exec.mode || 'manual') },
       { edit }
     );
@@ -565,7 +574,11 @@ async function replyMode(ctx, { edit = false } = {}) {
     await editOrReply(
       ctx,
       formatTogglesCard({ ...exec, executionMode: exec.mode }),
-      { reply_markup: togglesInlineKeyboard(exec.toggles || {}) },
+      {
+        reply_markup: togglesInlineKeyboard(exec.toggles || {}, {
+          mode: exec.mode || 'manual',
+        }),
+      },
       { edit }
     );
   }
@@ -646,8 +659,48 @@ async function replyMode(ctx, { edit = false } = {}) {
       );
       return;
     }
-    const next = !Boolean(cur.toggles?.[name]);
-    gate.settings.setToggle(name, next);
+    const currentlyOn = Boolean(cur.toggles?.[name]);
+    const highRisk = name === 'autoReplyMessages' || name === 'autoSubmitBids';
+    // Enabling high-risk toggles requires explicit confirm (was confusing “نیاز به تأیید”).
+    if (highRisk && !currentlyOn) {
+      await editOrReply(
+        ctx,
+        formatToggleConfirmCard(name, {
+          executionMode: cur.mode,
+          toggles: cur.toggles,
+        }),
+        {
+          reply_markup: toggleConfirmKeyboard(name, {
+            offerModeAuto: cur.mode !== 'auto',
+          }),
+        },
+        { edit }
+      );
+      return;
+    }
+    gate.settings.setToggle(name, !currentlyOn);
+    await replyToggles(ctx, { edit });
+  }
+
+  async function doToggleConfirm(ctx, name, { alsoModeAuto = false, edit = false } = {}) {
+    if (!gate) {
+      await ctx.reply('ذخیره تنظیمات در دسترس نیست.', menuOpts());
+      return;
+    }
+    const cur = gate.settings.get();
+    if (cur.emergencyStop) {
+      await editOrReply(
+        ctx,
+        '🛑 توقف اضطراری فعال است — سوئیچ‌ها قفل‌اند.',
+        { reply_markup: settingsInlineKeyboard(runtime.state, { emergencyStop: true }) },
+        { edit }
+      );
+      return;
+    }
+    if (alsoModeAuto && cur.mode !== 'auto') {
+      gate.settings.setMode('auto');
+    }
+    gate.settings.setToggle(name, true);
     await replyToggles(ctx, { edit });
   }
 
@@ -1741,6 +1794,15 @@ if (parsed.type === 'set_mode') {
     if (parsed.type === 'toggle') {
       await ctx.answerCallbackQuery({ text: 'سوئیچ…' });
       await doToggle(ctx, parsed.name, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'toggle_confirm') {
+      await ctx.answerCallbackQuery({ text: 'تأیید سوئیچ…' });
+      await doToggleConfirm(ctx, parsed.name, {
+        alsoModeAuto: Boolean(parsed.alsoModeAuto),
+        edit: true,
+      });
       return;
     }
 

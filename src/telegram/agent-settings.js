@@ -205,8 +205,7 @@ export function createAgentSettingsStore(db, { tenantId = 'default' } = {}) {
         emergencyStop: true,
         emergencyStoppedAt: new Date().toISOString(),
         mode: 'manual',
-    /** AI chat engagement: full_manual | pick_to_answer | full_auto */
-    chatAiMode: 'full_manual',
+        chatAiMode: 'full_manual',
         toggles: {
           autoReplyMessages: false,
           autoSubmitBids: false,
