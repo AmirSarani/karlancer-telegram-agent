@@ -312,11 +312,44 @@ export function formatScanSummary(s = {}) {
     }
   }
 
+  const prepLine = formatPrepareStatusLine(s);
+  if (prepLine) {
+    lines.push('', prepLine);
+  }
+
   if (s.scannedAt) {
     lines.push('', `⏱ ${formatRelativeTime(s.scannedAt)}`);
   }
 
   return lines.join('\n');
+}
+
+
+/**
+ * Persian line for scan→Brain prepare outcome (no Mutation jargon).
+ * @param {object} s
+ */
+export function formatPrepareStatusLine(s = {}) {
+  const prepared = Number(s.preparedCount) || 0;
+  const analyzed = Number(s.analyzedCount) || prepared;
+  const mode = s.prepareMode || null;
+  const failed = Number(s.prepareFailed) || 0;
+
+  if (prepared > 0) {
+    return `🤖 ${toFaNum(prepared)} مورد تحلیل شد → منتظر تأیید شما`;
+  }
+  if (mode === 'manual_offer' && (Number(s.priorityRooms?.length) || 0) > 0) {
+    return '🤖 پیش‌نویس آماده نیست — «تحلیل همه» را بزنید تا پاسخ‌ها برای تأیید شما ساخته شود.';
+  }
+  if (mode === 'auto' || mode === 'forced') {
+    if (failed > 0 && analyzed === 0) {
+      return '⚠️ تحلیل خودکار کامل نشد — بعداً تازه‌سازی کنید.';
+    }
+    if (analyzed > 0 && prepared === 0) {
+      return 'ℹ️ موارد قبلاً در صف تأیید بودند یا پیش‌نویس خالی ماند.';
+    }
+  }
+  return null;
 }
 
 /** Details — page X/Y and totals only here. */
@@ -338,6 +371,15 @@ export function formatScanDetails(s = {}) {
   ];
   if (s.softFailCount || s.errorsCount) {
     lines.push(`• بررسی ناقص: ${toFaNum(s.softFailCount ?? s.errorsCount)}`);
+  }
+  if (s.preparedCount != null) {
+    lines.push(`• پیش‌نویس آماده‌شده: ${toFaNum(s.preparedCount)}`);
+  }
+  if (s.replyApprovals != null) {
+    lines.push(`• پاسخ در صف تأیید: ${toFaNum(s.replyApprovals)}`);
+  }
+  if (s.bidApprovals != null) {
+    lines.push(`• پیشنهاد در صف تأیید: ${toFaNum(s.bidApprovals)}`);
   }
   if (s.scannedAt) lines.push(`• زمان: ${formatRelativeTime(s.scannedAt)}`);
   return lines.join('\n');
@@ -503,7 +545,13 @@ export function buildScanKeyboard(s = {}) {
 
   const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms : [];
   const unread = Number(s.unreadOnPage) || 0;
+  const prepared = Number(s.preparedCount) || 0;
   const pairs = [];
+  if (prepared > 0) {
+    pairs.push([`✅ تأییدها (${toFaNum(prepared)})`, 'goto:approvals']);
+  } else if (s.prepareMode === 'manual_offer' && rooms.length > 0) {
+    pairs.push(['🤖 تحلیل همه', 'scan:prepare']);
+  }
   if (rooms.length > 0) pairs.push([`🔥 مشاهده همه (${toFaNum(rooms.length)})`, 'scan:priority']);
   if (unread > 0) pairs.push([`🔔 خوانده‌نشده (${toFaNum(unread)})`, 'scan:unread']);
   pairs.push(['💬 گفتگوها', 'scan:chats']);
@@ -616,6 +664,7 @@ export function parseScanCallback(data) {
   if (data === 'scan:priority') return { type: 'scan_priority' };
   if (data === 'scan:unread') return { type: 'scan_unread' };
   if (data === 'scan:refresh') return { type: 'scan_refresh' };
+  if (data === 'scan:prepare') return { type: 'scan_prepare' };
   if (data === 'scan:chats') return { type: 'scan_chats' };
   if (data === 'scan:details') return { type: 'scan_details' };
   if (data === 'scan:back') return { type: 'scan_back' };
@@ -667,6 +716,7 @@ export default {
   priorityBadge,
   deriveScanState,
   formatScanSummary,
+  formatPrepareStatusLine,
   formatScanDetails,
   formatScanPriorityList,
   formatScanUnreadList,
