@@ -17,6 +17,29 @@ function optional(name, fallback = '') {
   return v != null && String(v).trim() !== '' ? String(v).trim() : fallback;
 }
 
+
+/**
+ * Parse TELEGRAM_OWNER_CHAT_ID as one id or comma-separated allowlist.
+ * Invalid tokens are skipped. Order preserved; duplicates removed.
+ * @param {string} [raw]
+ * @returns {number[]}
+ */
+export function parseTelegramOwnerChatIds(raw = '') {
+  if (raw == null || String(raw).trim() === '') return [];
+  const seen = new Set();
+  const out = [];
+  for (const part of String(raw).split(',')) {
+    const s = part.trim();
+    if (!s) continue;
+    const n = Number(s);
+    if (!Number.isFinite(n) || Number.isNaN(n)) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
 /**
  * Application config for API-first agent.
  * @param {{ requireTelegram?: boolean, requireOwner?: boolean }} [opts]
@@ -30,11 +53,13 @@ export function loadAppConfig(opts = {}) {
     ? required('TELEGRAM_BOT_TOKEN', process.env.TELEGRAM_BOT_TOKEN)
     : optional('TELEGRAM_BOT_TOKEN');
   const ownerRaw = optional('TELEGRAM_OWNER_CHAT_ID');
-  const telegramOwnerChatId = ownerRaw ? Number(ownerRaw) : null;
+  const telegramOwnerChatIds = parseTelegramOwnerChatIds(ownerRaw);
+  /** Primary owner (first id) — used for outbound notifications. */
+  const telegramOwnerChatId = telegramOwnerChatIds[0] ?? null;
 
-  if (requireTelegram && requireOwner && (telegramOwnerChatId == null || Number.isNaN(telegramOwnerChatId))) {
+  if (requireTelegram && requireOwner && telegramOwnerChatIds.length === 0) {
     throw new Error(
-      'TELEGRAM_OWNER_CHAT_ID is required. Message the bot once, copy your chat id, set it in .env, then run npm start again.'
+      'TELEGRAM_OWNER_CHAT_ID is required (one id or comma-separated list). Message the bot once, copy your chat id, set it in .env, then run npm start again.'
     );
   }
 
@@ -42,6 +67,7 @@ export function loadAppConfig(opts = {}) {
     root,
     telegramBotToken,
     telegramOwnerChatId,
+    telegramOwnerChatIds,
     openaiApiKey: optional('OPENAI_API_KEY'),
     openaiBaseUrl: optional('OPENAI_BASE_URL', 'https://api.openai.com/v1').replace(/\/$/, ''),
     openaiModel: optional('OPENAI_MODEL', 'gpt-4o-mini'),

@@ -188,6 +188,7 @@ async function main() {
     const { bot, start, runtime, stop } = createBot({
       token: config.telegramBotToken,
       ownerChatId: config.telegramOwnerChatId,
+      ownerChatIds: config.telegramOwnerChatIds,
       hooks: {
         onScanMessage: (info) => {
           pendingScanUi = info;
@@ -285,6 +286,7 @@ async function main() {
 
     logger.info('main_boot', {
       owner: config.telegramOwnerChatId ?? 'unset',
+      owners: config.telegramOwnerChatIds ?? [],
       auth: api.client.hasAuth,
       db: config.dbPath,
     });

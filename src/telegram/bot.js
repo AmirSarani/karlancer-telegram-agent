@@ -41,19 +41,55 @@ import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
 
 /**
+ * Normalize owner id list from ownerChatIds and/or legacy ownerChatId.
+ * @param {{ ownerChatId?: number|null, ownerChatIds?: number[]|null }} opts
+ * @returns {number[]}
+ */
+export function resolveOwnerChatIds({ ownerChatId = null, ownerChatIds = null } = {}) {
+  const raw = Array.isArray(ownerChatIds) && ownerChatIds.length
+    ? ownerChatIds
+    : ownerChatId != null
+      ? [ownerChatId]
+      : [];
+  const seen = new Set();
+  const out = [];
+  for (const v of raw) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || Number.isNaN(n)) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+/**
+ * @param {import('grammy').Context|object} ctx
+ * @param {number[]} owners
+ */
+export function isOwnerContext(ctx, owners) {
+  if (!owners || owners.length === 0) return false;
+  const chatId = ctx?.chat?.id;
+  const fromId = ctx?.from?.id;
+  return owners.includes(chatId) || owners.includes(fromId);
+}
+
+/**
  * Owner-only Telegram AI Operations Dashboard.
  *
  * @param {object} opts
  * @param {string} opts.token
- * @param {number|null} opts.ownerChatId
+ * @param {number|null} [opts.ownerChatId] primary / legacy single owner
+ * @param {number[]} [opts.ownerChatIds] allowlist (preferred; may include primary)
  * @param {{ queue?: object, onStatus?: Function, db?: object, api?: object, llm?: object }} [opts.hooks]
  */
-export function createBot({ token, ownerChatId, hooks = {} }) {
+export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
   const bot = new Bot(token);
   const queue = hooks.queue || null;
   const db = hooks.db || null;
   const api = hooks.api || null;
   const llm = hooks.llm || null;
+  const owners = resolveOwnerChatIds({ ownerChatId, ownerChatIds });
 
   /** @type {{ state: 'running'|'paused', startedAt: string, lastCommandAt: string|null }} */
   const runtime = {
@@ -63,15 +99,14 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
   };
 
   function isOwner(ctx) {
-    if (ownerChatId == null) return false;
-    return ctx.chat?.id === ownerChatId || ctx.from?.id === ownerChatId;
+    return isOwnerContext(ctx, owners);
   }
 
   async function denyIfNotOwner(ctx, { asCallback = false } = {}) {
     if (isOwner(ctx)) return false;
     const chatId = ctx.chat?.id ?? ctx.from?.id;
     const msg =
-      ownerChatId == null
+      owners.length === 0
         ? `این بات هنوز به owner قفل نشده.\nchat id شما: \`${chatId}\`\nآن را در TELEGRAM_OWNER_CHAT_ID بگذارید و بات را ری‌استارت کنید.`
         : 'دسترسی فقط برای owner است.';
     if (asCallback) {

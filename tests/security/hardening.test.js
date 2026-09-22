@@ -57,14 +57,12 @@ test('client refuses non-karlancer absolute URL', async () => {
 });
 
 test('Telegram owner spoofing: isOwner requires exact chat id', async () => {
-  // lightweight unit of the check logic
-  const ownerChatId = 111;
-  function isOwner(ctx) {
-    if (ownerChatId == null) return false;
-    return ctx.chat?.id === ownerChatId || ctx.from?.id === ownerChatId;
-  }
-  assert.equal(isOwner({ chat: { id: 222 }, from: { id: 222 } }), false);
-  assert.equal(isOwner({ chat: { id: 111 }, from: { id: 999 } }), true);
+  const { isOwnerContext } = await import('../../src/telegram/bot.js');
+  const owners = [111];
+  assert.equal(isOwnerContext({ chat: { id: 222 }, from: { id: 222 } }, owners), false);
+  assert.equal(isOwnerContext({ chat: { id: 111 }, from: { id: 999 } }, owners), true);
+  assert.equal(isOwnerContext({ chat: { id: 222 }, from: { id: 222 } }, [111, 333]), false);
+  assert.equal(isOwnerContext({ chat: { id: 333 }, from: { id: 333 } }, [111, 333]), true);
 });
 
 test('replay approval after decide fails soft', () => {
