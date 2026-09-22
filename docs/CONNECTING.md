@@ -5,7 +5,7 @@
 See `configs/cursor-mcp.json.example`.
 
 ```bash
-export KARLANCER_ACCESS_TOKEN=...   # from browser localStorage auth-token.access_token
+export KARLANCER_ACCESS_TOKEN='...' # localStorage auth-token.access_token (quote: token contains |)
 export MCP_API_KEY=dev-local        # for HTTP mode
 npm run mcp
 ```

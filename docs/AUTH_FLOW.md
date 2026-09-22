@@ -9,11 +9,27 @@
 
 Hot reload: `client.setAccessToken(token)` / `setCookie` (no process restart).
 
-## HAR findings (2026-09-22)
+Token format (observed): Laravel Sanctum-style `numericId|secret` (not a JWT). Store **single-quoted** in bash `.env` files because `|` breaks unquoted shell assignment. systemd `EnvironmentFile` accepts the raw value without quotes.
 
-1. **No refresh endpoint** observed across both HAR captures.
-2. Exported HAR **did not include** `Authorization`, `Cookie`, or CSRF header values (Chrome redaction).
-3. Authenticated GETs/POSTs still succeeded in-browser during capture → auth is almost certainly Bearer (and/or cookie) applied by the SPA, matching this client.
+## Login (API)
+
+| Method | Path | Body keys | Status |
+|--------|------|-----------|--------|
+| POST | `/api/login/phone` | `phone`, `password`, `role`, `unregistered_project_token`, `unregistered_service_token` | 200 |
+
+Response `data` includes `access_token`, `token_type` (`Bearer`), `user`, …  
+Browser also stores `localStorage["auth-token"]` = `{ token_type, access_token, refresh_token, is_token_valid }`.  
+**No refresh endpoint** observed; `refresh_token` was empty after login (2026-09-22).
+
+## HAR + live findings (2026-09-22)
+
+1. **No refresh endpoint** observed across HAR captures.
+2. Exported HAR **did not include** `Authorization` / `Cookie` / CSRF header **values** (Chrome redaction). Header **names** on mutations still showed `content-type` (+ browser CORS headers); no `x-csrf-token` / `x-xsrf-token`.
+3. Live browser login + authenticated GETs confirmed wire auth:
+   - Request header: `Authorization: Bearer <access_token>`
+   - Request header (POSTs): `Content-Type: application/json`
+   - Response CORS: `access-control-allow-headers: Content-Type, Authorization`
+4. Authenticated GETs used for confirmation (no mutation side effects): `/api/profile`, `/api/dashboard`, `/api/notifications/`, `/api/rooms/`.
 
 ## Lifecycle
 
@@ -28,14 +44,14 @@ env token/cookie → KarlancerClient headers → request
 
 ## Operator rotation
 
-1. Log into karlancer.com in a browser you control.
-2. Copy access token from `localStorage` (see existing CONNECTING docs) — **never paste into chat/git**.
-3. Set `KARLANCER_ACCESS_TOKEN` on the VPS/agent host.
-4. Optionally call MCP health / `user.profile` to verify.
+1. Prefer `POST /api/login/phone` (or browser login) from a private operator host — **never paste tokens/passwords into chat/git**.
+2. Copy `access_token` from login response or `localStorage["auth-token"].access_token`.
+3. Set `KARLANCER_ACCESS_TOKEN` on the VPS/agent host (quote for bash if using `source`).
+4. Confirm with `user.profile` / MCP health / boot log `auth: true`.
 
 ## CSRF / cookies
 
-Documented carefully: HARs show **no** `X-XSRF-TOKEN` / `X-CSRF-TOKEN` on API calls in the export. If future captures show CSRF requirements, document before enabling mutations.
+HARs + live capture show **no** `X-XSRF-TOKEN` / `X-CSRF-TOKEN` on API calls. Bearer alone is sufficient for reads. Mutations use the same client header path.
 
 ## Tenant isolation
 

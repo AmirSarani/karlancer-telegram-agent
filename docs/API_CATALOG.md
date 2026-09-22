@@ -6,6 +6,7 @@ See **[KARLANCER_API_MAP.md](./KARLANCER_API_MAP.md)** for the HAR-backed full m
 
 | Method | Path | Auth | Status |
 |--------|------|------|--------|
+| POST | `/api/login/phone` | public (returns Bearer) | confirmed 2026-09-22 |
 | GET | `/api/rooms/?page=` | Bearer | confirmed |
 | GET | `/api/rooms/archive?page=` | Bearer | HAR |
 | GET | `/api/rooms/{id}/messages-pg?page=` | Bearer | confirmed |
