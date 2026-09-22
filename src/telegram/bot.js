@@ -54,7 +54,10 @@ import { createPermissionGate } from './permission-gate.js';
 import { createMutationRequester } from './mutation-request.js';
 import {
   formatOpportunityCard,
+  formatOpportunityDetails,
   opportunityCardKeyboard,
+  opportunityScanResultKeyboard,
+  OPP_BATCH_PREP_CAP,
   smartBidKeyboard,
   opportunitiesListKeyboard,
   opportunityRulesKeyboard,
@@ -1301,7 +1304,7 @@ async function replyMode(ctx, { edit = false } = {}) {
     await editOrReply(
       ctx,
       formatOpportunityScanResult(out),
-      { reply_markup: opportunitiesListKeyboard(scanner.store.list({ limit: 10 })) },
+      { reply_markup: opportunityScanResultKeyboard(out) },
       { edit: true }
     );
   }
@@ -1416,6 +1419,102 @@ async function replyMode(ctx, { edit = false } = {}) {
         'ارسال زنده فقط پس از تأیید و VerifiedMutationContract.',
       ].join('\n'),
       { reply_markup: opportunityCardKeyboard(projectId) },
+      { edit: true }
+    );
+  }
+
+  /**
+   * Batch-prepare smart bids into HITL approvals (capped). Never live-sends.
+   * Includes NOTIFY-tier so owner can one-tap draft → تأییدها.
+   */
+  async function prepMatchedOpportunities(ctx) {
+    if (!mutations) {
+      await ctx.reply('صف جهش در دسترس نیست.', menuOpts());
+      return;
+    }
+    const store = createOpportunityStore(db);
+    const rows = store
+      .list({ limit: 40 })
+      .filter((r) => {
+        if (!r || r.state === 'IGNORED' || r.state === 'SUBMITTED') return false;
+        const d = r.decision;
+        if (d === 'IGNORE') return false;
+        return (
+          d === 'NOTIFY' ||
+          d === 'CREATE_DRAFT' ||
+          d === 'REQUEST_APPROVAL' ||
+          Number(r.score || 0) >= 40
+        );
+      })
+      .slice(0, OPP_BATCH_PREP_CAP);
+
+    if (!rows.length) {
+      await editOrReply(
+        ctx,
+        [
+          'مورد منطبق/قابل پیش‌نویس برای آماده‌سازی نیست.',
+          'از «🔥 فرصت‌ها» یک کارت را دستی باز کنید.',
+        ].join('\n'),
+        { reply_markup: opportunityScanResultKeyboard({}) },
+        { edit: true }
+      );
+      return;
+    }
+
+    const profile = store.getScoringProfile();
+    let prepared = 0;
+    let denied = 0;
+    for (const row of rows) {
+      const smart = buildSmartBid(row.opportunity || row, profile, { score: row.score });
+      try {
+        const result = mutations.request({
+          action: 'bids.submit',
+          payload: {
+            projectId: row.id,
+            proposalText: smart.text,
+            price: smart.price ?? row.budgetMin ?? 1_000_000,
+            days: smart.days ?? 7,
+            smartBid: true,
+            opportunityScore: row.score,
+            fromBatchPrep: true,
+          },
+          gateCtx: {
+            source: 'telegram',
+            projectId: row.id,
+            matchScore: row.score,
+            confidence: row.score,
+            budget: row.budgetMax ?? row.budgetMin,
+            category: row.category,
+            hasExistingBid: false,
+            riskHint: 'high',
+          },
+          requestedBy: `telegram:${ctx.from?.id}`,
+          targetRef: String(row.id),
+          forceRequireApproval: true,
+          idempotencyKey: `opp-batch-prep:${row.id}`,
+        });
+        if (result?.denied) denied += 1;
+        else {
+          prepared += 1;
+          store.setState(row.id, 'ACTION_CREATED');
+        }
+      } catch {
+        denied += 1;
+      }
+    }
+
+    await editOrReply(
+      ctx,
+      [
+        '📝 پیش‌نویس گروهی',
+        '————————',
+        `${prepared} مورد به «تأییدها» اضافه شد (سقف ${OPP_BATCH_PREP_CAP}).`,
+        denied ? `${denied} مورد رد/ناموفق بود.` : null,
+        'ارسال زنده فقط پس از تأیید شما انجام می‌شود.',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      { reply_markup: decisionInboxKeyboard() },
       { edit: true }
     );
   }
@@ -1719,7 +1818,7 @@ async function replyMode(ctx, { edit = false } = {}) {
         };
         await editOrReply(
           ctx,
-          formatOpportunityCard(card),
+          formatOpportunityDetails(card),
           { reply_markup: opportunityCardKeyboard(row.id) },
           { edit: true }
         );
@@ -1776,6 +1875,11 @@ async function replyMode(ctx, { edit = false } = {}) {
           {},
           { edit: true }
         );
+        return;
+      }
+      if (oppCb.type === 'opp_prep_matched' && db) {
+        await ctx.answerCallbackQuery({ text: 'آماده‌سازی…' });
+        await prepMatchedOpportunities(ctx);
         return;
       }
     }

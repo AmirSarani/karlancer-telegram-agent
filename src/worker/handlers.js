@@ -602,6 +602,8 @@ export async function handleJob(ctx, job) {
         matched: out.matched,
         drafts: out.drafts,
         notified: out.notified,
+        approvals: out.approvals,
+        autoExecuted: out.autoExecuted,
         skipped: out.skipped || false,
         reason: out.reason || null,
       });
