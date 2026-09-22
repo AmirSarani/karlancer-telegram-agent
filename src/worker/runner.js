@@ -174,10 +174,20 @@ if (isMain) {
   });
   const gate = createPermissionGate(db);
   const mutations = createMutationRequester({ queue, gate });
-  async function notifyOpportunity(text) {
+  async function notifyOpportunity(text, meta = {}) {
     const ids = config.telegramOwnerChatIds || [];
+    let reply_markup;
+    try {
+      const opp = meta?.opportunity;
+      if (opp?.id) {
+        const { opportunityCardKeyboard } = await import('../telegram/opportunity-ux.js');
+        reply_markup = opportunityCardKeyboard(opp.id);
+      }
+    } catch {
+      reply_markup = undefined;
+    }
     if (config.telegramBotToken && ids.length) {
-      await notifyAllOwners({ token: config.telegramBotToken, chatIds: ids, text });
+      await notifyAllOwners({ token: config.telegramBotToken, chatIds: ids, text, reply_markup });
     }
     if (config.baleBotToken) {
       await notifyBaleOwners({

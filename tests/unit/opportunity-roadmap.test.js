@@ -134,3 +134,48 @@ test('scoring profile persists in store', () => {
   assert.deepEqual(p.preferredSkills, ['react']);
   assert.equal(isScoringConfigured(p), true);
 });
+
+test('opportunity card and scan keyboards expose HITL controls', async () => {
+  const {
+    opportunityCardKeyboard,
+    opportunityScanResultKeyboard,
+    parseOpportunityCallback,
+    formatOpportunityDetails,
+  } = await import('../../src/telegram/opportunity-ux.js');
+
+  const cardKb = opportunityCardKeyboard('42');
+  const cardData = cardKb.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(cardData.includes('opp:draft:42'));
+  assert.ok(cardData.includes('opp:bidreq:42'));
+  assert.ok(cardData.includes('opp:ignore:42'));
+  assert.ok(cardData.includes('opp:view:42'));
+  assert.equal(parseOpportunityCallback('opp:bidreq:42').type, 'opp_bidreq');
+  assert.equal(parseOpportunityCallback('opp:prep_matched').type, 'opp_prep_matched');
+
+  const scanKb = opportunityScanResultKeyboard({ matched: 2, notified: 3 });
+  const scanData = scanKb.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(scanData.includes('opp:list'));
+  assert.ok(scanData.includes('goto:approvals'));
+  assert.ok(scanData.includes('opp:prep_matched'));
+  assert.ok(scanData.includes('nav:home'));
+  assert.ok(scanData.includes('opp:profile'));
+
+  const details = formatOpportunityDetails({
+    opportunity: {
+      id: '7',
+      title: 'تست جزئیات',
+      budgetMin: 1e6,
+      budgetMax: 2e6,
+      skills: ['React'],
+      description: 'توضیح نمونه',
+      client: { name: 'Ali', rate: 4.5 },
+    },
+    score: 55,
+    decision: 'NOTIFY',
+    reasons: ['امتیاز متوسط'],
+  });
+  assert.ok(details.includes('جزئیات'));
+  assert.ok(details.includes('تست جزئیات'));
+  assert.ok(details.includes('React'));
+});
+

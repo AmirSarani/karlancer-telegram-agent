@@ -34,20 +34,91 @@ export function formatOpportunityCard(card) {
 export function opportunityCardKeyboard(projectId) {
   const id = String(projectId);
   return new InlineKeyboard()
-    .text('✨ پیشنهاد هوشمند', `opp:smart:${id}`)
-    .text('📝 پیش‌نویس', `opp:draft:${id}`)
+    .text('📝 پیش‌نویس پیشنهاد', `opp:draft:${id}`)
+    .text('✅ بفرست تأییدها', `opp:bidreq:${id}`)
     .row()
-    .text('👁 مشاهده', `opp:view:${id}`)
-    .text('🗑 نادیده', `opp:ignore:${id}`)
+    .text('⏭ رد / نادیده', `opp:ignore:${id}`)
+    .text('🔎 جزئیات', `opp:view:${id}`)
     .row()
-    .text('❌ رد بازخورد', `opp:reject:${id}`)
     .text('🏠 خانه', 'nav:home');
+}
+
+/** Cap for batch «پیش‌نویس همهٔ منطبق» from scan summary. */
+export const OPP_BATCH_PREP_CAP = 5;
+
+/**
+ * Inline controls on «نتیجه اسکن فرصت‌ها» — owner can jump to list / approvals / batch HITL prep.
+ * @param {object} [summary]
+ */
+export function opportunityScanResultKeyboard(summary = {}) {
+  const matched = Number(summary.matched ?? 0) || 0;
+  const drafts = Number(summary.drafts ?? 0) || 0;
+  const approvals = Number(summary.approvals ?? 0) || 0;
+  const notified = Number(summary.notified ?? 0) || 0;
+  const showBatch = matched > 0 || drafts > 0 || notified > 0;
+  const kb = new InlineKeyboard()
+    .text('🔥 فرصت‌ها', 'opp:list')
+    .text('✅ تأییدها', 'goto:approvals')
+    .row();
+  if (showBatch) {
+    kb.text('📝 پیش‌نویس همهٔ منطبق', 'opp:prep_matched').row();
+  }
+  kb.text('🏠 خانه', 'nav:home').text('⚙️ قوانین امتیاز', 'opp:profile');
+  void approvals;
+  return kb;
+}
+
+/**
+ * Fuller project view for «🔎 جزئیات».
+ * @param {object} card
+ */
+export function formatOpportunityDetails(card) {
+  const o = card.opportunity || card;
+  const budget =
+    o.budgetMin != null || o.budgetMax != null
+      ? `${faNum(o.budgetMin)} – ${faNum(o.budgetMax)}`
+      : '—';
+  const reasons = (card.reasons || o.scoreReasons || []).slice(0, 8);
+  const client = o.client || {};
+  const clientBits = [
+    client.name || client.username || null,
+    client.rate != null ? `★ ${client.rate}` : null,
+    client.country || null,
+  ].filter(Boolean);
+  const desc = String(o.description || o.desc || '').trim();
+  const descLine = desc
+    ? desc.length > 280
+      ? `${desc.slice(0, 279)}…`
+      : desc
+    : null;
+  return [
+    '🔎 جزئیات فرصت',
+    '————————',
+    o.title || `پروژه ${o.id}`,
+    `🆔 ${o.id}`,
+    `💰 بودجه: ${budget}`,
+    `⭐ امتیاز: ${card.score ?? o.score ?? '—'} / ۱۰۰`,
+    `📌 تصمیم: ${decisionFa(card.decision || o.decision)}`,
+    o.category ? `📂 دسته: ${o.category}` : null,
+    (o.skills || []).length ? `🛠 ${(o.skills || []).join('، ')}` : null,
+    clientBits.length ? `👤 کارفرما: ${clientBits.join(' · ')}` : null,
+    o.ageHours != null ? `⏱ سن تقریبی: ${faNum(o.ageHours)} ساعت` : null,
+    o.source ? `📥 منبع: ${o.source}` : null,
+    '',
+    descLine ? 'توضیح:' : null,
+    descLine,
+    reasons.length ? '' : null,
+    reasons.length ? 'چرا این امتیاز؟' : null,
+    ...reasons.map((r) => `• ${r}`),
+  ]
+    .filter((l) => l != null)
+    .join('\n');
 }
 
 export function smartBidKeyboard(projectId) {
   const id = String(projectId);
   return new InlineKeyboard()
-    .text('✅ درخواست تأیید ارسال', `opp:bidreq:${id}`)
+    .text('✅ بفرست تأییدها', `opp:bidreq:${id}`)
     .row()
     .text('✏️ ویرایش متن', `opp:bidedit:${id}`)
     .text('⬅️ فرصت', `opp:view:${id}`)
@@ -379,6 +450,7 @@ export function parseOpportunityCallback(data) {
   if (data === 'opp:rule:sample') return { type: 'opp_rule_sample' };
   if (data === 'opp:rule:new') return { type: 'opp_rule_new' };
   if (data === 'opp:profile') return { type: 'opp_profile' };
+  if (data === 'opp:prep_matched') return { type: 'opp_prep_matched' };
   if (data === 'opp:prof:skills') return { type: 'opp_prof_edit', field: 'skills' };
   if (data === 'opp:prof:budget') return { type: 'opp_prof_edit', field: 'budget' };
   if (data === 'opp:prof:cats') return { type: 'opp_prof_edit', field: 'cats' };
@@ -463,6 +535,9 @@ function relativeFa(iso) {
 export default {
   formatOpportunityCard,
   opportunityCardKeyboard,
+  opportunityScanResultKeyboard,
+  formatOpportunityDetails,
+  OPP_BATCH_PREP_CAP,
   smartBidKeyboard,
   opportunitiesListKeyboard,
   opportunityRulesKeyboard,

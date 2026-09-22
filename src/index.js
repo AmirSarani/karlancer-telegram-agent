@@ -258,8 +258,18 @@ async function main() {
     llm,
     budget,
     mutations,
-    notifyOpportunity: async (text) => {
-      await notifyAllOwnersChannels(text);
+    notifyOpportunity: async (text, meta = {}) => {
+      let reply_markup;
+      try {
+        const opp = meta?.opportunity;
+        if (opp?.id) {
+          const { opportunityCardKeyboard } = await import('./telegram/opportunity-ux.js');
+          reply_markup = opportunityCardKeyboard(opp.id);
+        }
+      } catch {
+        reply_markup = undefined;
+      }
+      await notifyAllOwnersChannels(text, reply_markup);
     },
     allowLiveAutoBid: liveAutoRef.get(),
     allowLiveAutoSend: liveAutoSendRef.get(),
@@ -286,9 +296,12 @@ async function main() {
       
       if (type === 'opportunities.scanned' && payload && !payload.skipped) {
         try {
-          const { formatOpportunityScanResult } = await import('./telegram/opportunity-ux.js');
+          const {
+            formatOpportunityScanResult,
+            opportunityScanResultKeyboard,
+          } = await import('./telegram/opportunity-ux.js');
           const text = formatOpportunityScanResult(payload);
-          await notifyAllOwnersChannels(text);
+          await notifyAllOwnersChannels(text, opportunityScanResultKeyboard(payload));
         } catch (e) {
           logger.warn('opportunity_scan_notify_failed', { err: e.message });
         }
