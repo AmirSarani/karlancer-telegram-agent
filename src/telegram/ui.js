@@ -244,21 +244,45 @@ export function modeInlineKeyboard(current = 'manual') {
     .row()
     .text(`${mark('auto')}🔴 خودکار`, 'mode:auto')
     .row()
+    .text('🎚 سوئیچ‌ها (قفل پیام)', 'nav:toggles')
+    .row()
     .text('⬅️ تنظیمات', 'nav:set')
     .text('🏠 خانه', 'nav:home');
 }
 
-export function togglesInlineKeyboard(toggles = {}) {
-  const on = (v) => (v ? '🟢 روشن' : '🔒 قفل');
+export function togglesInlineKeyboard(toggles = {}, { mode = 'manual' } = {}) {
+  const sw = (v) => (v ? '🟢 روشن' : '🔒 خاموش');
+  const msgEff = Boolean(toggles.autoReplyMessages) && mode === 'auto';
+  const bidEff = Boolean(toggles.autoSubmitBids) && mode === 'auto';
+  const readEff = Boolean(toggles.autoMarkNotificationsRead) && mode !== 'manual';
+  const eff = (ok) => (ok ? '· مؤثر ✅' : '· مؤثر ❌');
   return new InlineKeyboard()
-    .text(`پاسخ خودکار: ${on(toggles.autoReplyMessages)}`, 'tog:reply')
+    .text(`پیام: ${sw(toggles.autoReplyMessages)} ${eff(msgEff)}`, 'tog:reply')
     .row()
-    .text(`پیشنهاد خودکار: ${on(toggles.autoSubmitBids)}`, 'tog:bid')
+    .text(`پیشنهاد: ${sw(toggles.autoSubmitBids)} ${eff(bidEff)}`, 'tog:bid')
     .row()
-    .text(`خواندن اعلان: ${on(toggles.autoMarkNotificationsRead)}`, 'tog:read')
+    .text(`خواندن اعلان: ${sw(toggles.autoMarkNotificationsRead)} ${eff(readEff)}`, 'tog:read')
+    .row()
+    .text('🎛 حالت اجرا', 'nav:mode')
+    .text('📜 قوانین', 'nav:rules')
     .row()
     .text('⬅️ تنظیمات', 'nav:set')
     .text('🏠 خانه', 'nav:home');
+}
+
+/** Confirm keyboard when enabling a high-risk auto toggle. */
+export function toggleConfirmKeyboard(name, { offerModeAuto = false } = {}) {
+  const map = {
+    autoReplyMessages: { on: 'tog:reply:on', onMode: 'tog:reply:on+', cancel: 'nav:toggles' },
+    autoSubmitBids: { on: 'tog:bid:on', onMode: 'tog:bid:on+', cancel: 'nav:toggles' },
+  };
+  const ids = map[name] || map.autoReplyMessages;
+  const kb = new InlineKeyboard().text('✅ فقط سوئیچ را روشن کن', ids.on).row();
+  if (offerModeAuto) {
+    kb.text('✅ سوئیچ + حالت اجرا → خودکار', ids.onMode).row();
+  }
+  kb.text('❌ انصراف', ids.cancel).row().text('🏠 خانه', 'nav:home');
+  return kb;
 }
 
 export function rulesInlineKeyboard() {
@@ -371,6 +395,10 @@ export function parseCallbackData(data) {
   if (data === 'tog:reply') return { type: 'toggle', name: 'autoReplyMessages' };
   if (data === 'tog:bid') return { type: 'toggle', name: 'autoSubmitBids' };
   if (data === 'tog:read') return { type: 'toggle', name: 'autoMarkNotificationsRead' };
+  if (data === 'tog:reply:on') return { type: 'toggle_confirm', name: 'autoReplyMessages', alsoModeAuto: false };
+  if (data === 'tog:reply:on+') return { type: 'toggle_confirm', name: 'autoReplyMessages', alsoModeAuto: true };
+  if (data === 'tog:bid:on') return { type: 'toggle_confirm', name: 'autoSubmitBids', alsoModeAuto: false };
+  if (data === 'tog:bid:on+') return { type: 'toggle_confirm', name: 'autoSubmitBids', alsoModeAuto: true };
   if (data === 'rule:msg') return { type: 'rule_view', kind: 'message' };
   if (data === 'rule:bid') return { type: 'rule_view', kind: 'bid' };
   if (data === 'rule:msg:tog') return { type: 'rule_toggle', kind: 'message' };
@@ -598,6 +626,8 @@ export function chatAiModeLabelFa(mode) {
 
 export function formatChatAiModeCard(s = {}) {
   const mode = s.chatAiMode || 'full_manual';
+  const exec = s.executionMode || s.mode || 'manual';
+  const t = s.toggles || {};
   return [
     '🤖 حالت AI گفتگو',
     '————————',
@@ -608,7 +638,14 @@ export function formatChatAiModeCard(s = {}) {
     '🟡 انتخابی — تحلیل+پیش‌نویس+قیمت؛ شما انتخاب می‌کنید «جواب بدم؟»',
     '🔴 خودکار — تحلیل+دروازه مجوز+سقف روزانه (هرگز نامحدود)',
     '',
-    'امنیت: توقف اضطراری، بلک‌لیست، قرارداد تأییدشده، پرچم ALLOW_LIVE_AUTO_SEND',
+    '⚠️ این تنظیم جدا از «حالت اجرا» و «سوئیچ پیام» است.',
+    'برای ارسال خودکار واقعی علاوه بر AI خودکار نیاز است:',
+    `• حالت اجرا: ${modeLabelFa(exec)} ${exec === 'auto' ? '✅' : '← باید خودکار شود'}`,
+    `• سوئیچ پیام: ${t.autoReplyMessages ? 'روشن ✅' : 'خاموش ← از سوئیچ‌ها باز کنید'}`,
+    '• قانون پیام + سقف روزانه',
+    '• ALLOW_LIVE_AUTO_SEND (پیش‌فرض خاموش/امن — بدون آن فقط HITL)',
+    '',
+    'امنیت: توقف اضطراری، بلک‌لیست، قرارداد تأییدشده',
     s.emergencyStop ? '\n🛑 توقف اضطراری فعال است.' : '',
   ]
     .filter(Boolean)
@@ -624,6 +661,9 @@ export function chatAiModeInlineKeyboard(current = 'full_manual') {
     .row()
     .text(`${mark('full_auto')}🔴 خودکار`, 'chatmode:full_auto')
     .row()
+    .text('🎚 سوئیچ پیام', 'nav:toggles')
+    .text('🎛 حالت اجرا', 'nav:mode')
+    .row()
     .text('📜 قوانین AI', 'nav:rules')
     .text('✅ جواب‌داده‌شده‌ها', 'goto:answered')
     .row()
@@ -633,7 +673,20 @@ export function chatAiModeInlineKeyboard(current = 'full_manual') {
 
 
 export function lockAutoFa(on) {
-  return on ? '🟢 خودکار' : '🔒 قفل (نیاز به تأیید)';
+  return on ? '🟢 خودکار (باز)' : '🔒 قفل';
+}
+
+/**
+ * Human lock line: switch vs effective (mode-gated).
+ * @param {{ toggleOn?: boolean, effective?: boolean, needMode?: string }} opts
+ */
+export function lockLineFa({ toggleOn = false, effective = false, needMode = null } = {}) {
+  if (effective) return '🟢 خودکار (باز)';
+  if (toggleOn && needMode) {
+    return `🟡 سوئیچ روشن · قفل مؤثر (حالت را «${needMode}» کنید)`;
+  }
+  if (toggleOn) return '🟡 سوئیچ روشن · هنوز مؤثر نیست';
+  return '🔒 قفل — از «سوئیچ‌ها» باز کنید';
 }
 
 export function formatSettingsCard(s = {}) {
@@ -649,6 +702,9 @@ export function formatSettingsCard(s = {}) {
   const liveLine = s.liveAutoBid
     ? '• پیشنهاد زنده: ⚡ روشن'
     : '• پیشنهاد زنده: 🔒 خاموش (امن)';
+  const msgOn = Boolean(toggles.autoReplyMessages);
+  const bidOn = Boolean(toggles.autoSubmitBids);
+  const readOn = Boolean(toggles.autoMarkNotificationsRead);
   const lines = [
     '⚙️ تنظیمات اجرا',
     '————————',
@@ -660,12 +716,14 @@ export function formatSettingsCard(s = {}) {
     s.emergencyStop ? '• 🛑 توقف اضطراری: فعال' : '• توقف اضطراری: خاموش',
     liveLine,
     '',
-    '🔓 قفل عملیات',
-    `• پیام: ${lockAutoFa(Boolean(toggles.autoReplyMessages) && mode === 'auto')}`,
-    `• پیشنهاد: ${lockAutoFa(Boolean(toggles.autoSubmitBids) && mode === 'auto')}`,
-    `• خواندن اعلان: ${lockAutoFa(Boolean(toggles.autoMarkNotificationsRead) && mode !== 'manual')}`,
+    '🔓 قفل عملیات (مؤثر)',
+    `• پیام: ${lockLineFa({ toggleOn: msgOn, effective: msgOn && mode === 'auto', needMode: 'خودکار' })}`,
+    `• پیشنهاد: ${lockLineFa({ toggleOn: bidOn, effective: bidOn && mode === 'auto', needMode: 'خودکار' })}`,
+    `• خواندن اعلان: ${lockLineFa({ toggleOn: readOn, effective: readOn && mode !== 'manual', needMode: 'کمکی/خودکار' })}`,
     authLine,
     '',
+    '📌 پیام خودکار واقعی = حالت اجرا «خودکار» + سوئیچ پیام + قانون پیام.',
+    '🤖 «حالت AI گفتگو» جداست (تحلیل/پیش‌نویس) و به‌تنهایی قفل ارسال را باز نمی‌کند.',
     '💡 پیش‌فرض دستی است. خودکار فقط با قانون + سقف روزانه.',
     '🔐 تمدید نشست: توکن مرورگر بهتر از رمز در چت.',
     '🖥 برای خواندن داده / مغز / امنیت → «کنترل سیستم»',
@@ -675,6 +733,7 @@ export function formatSettingsCard(s = {}) {
 
 export function formatModeCard(s = {}) {
   const mode = s.executionMode || s.mode || 'manual';
+  const t = s.toggles || {};
   return [
     '🎛 حالت اجرا',
     '————————',
@@ -682,8 +741,14 @@ export function formatModeCard(s = {}) {
     `فعلی: ${modeLabelFa(mode)}`,
     '',
     '🟢 دستی — فقط پیشنهاد؛ هر ارسال با تأیید شما',
-    '🟡 کمکی — آماده‌سازی کامل؛ کار کم‌ریسک خودکار',
+    '🟡 کمکی — آماده‌سازی کامل؛ کار کم‌ریسک خودکار (ارسال/پیشنهاد همچنان تأیید)',
     '🔴 خودکار — قانون + سوئیچ + سقف (هرگز نامحدود)',
+    '',
+    '⚠️ عوض کردن حالت به‌تنهایی سوئیچ پیام/پیشنهاد را باز نمی‌کند.',
+    'بعد از «خودکار»، از «سوئیچ‌ها» قفل پیام را با تأیید باز کنید.',
+    t.autoReplyMessages || t.autoSubmitBids
+      ? `وضعیت سوئیچ: پیام ${t.autoReplyMessages ? 'روشن' : 'خاموش'} · پیشنهاد ${t.autoSubmitBids ? 'روشن' : 'خاموش'}`
+      : null,
     s.emergencyStop ? '\n🛑 توقف اضطراری فعال است.' : '',
   ]
     .filter(Boolean)
@@ -721,18 +786,46 @@ export function formatRulesCard(s = {}) {
 export function formatTogglesCard(s = {}) {
   const t = s.toggles || {};
   const mode = s.executionMode || s.mode || 'manual';
+  const msgEff = Boolean(t.autoReplyMessages) && mode === 'auto';
+  const bidEff = Boolean(t.autoSubmitBids) && mode === 'auto';
+  const readEff = Boolean(t.autoMarkNotificationsRead) && mode !== 'manual';
   return [
     '🎚 سوئیچ‌های خودکار',
     '————————',
     '',
-    `حالت فعلی: ${modeLabelFa(mode)}`,
+    `حالت اجرا فعلی: ${modeLabelFa(mode)}`,
     '',
-    `• پاسخ پیام: ${t.autoReplyMessages ? 'روشن' : 'خاموش'}`,
-    `• ثبت پیشنهاد: ${t.autoSubmitBids ? 'روشن' : 'خاموش'}`,
-    `• خواندن اعلان: ${t.autoMarkNotificationsRead ? 'روشن' : 'خاموش'}`,
+    `• پاسخ پیام: ${t.autoReplyMessages ? '🟢 روشن' : '🔒 خاموش'} — مؤثر: ${msgEff ? '✅ باز' : '❌ قفل'}`,
+    `• ثبت پیشنهاد: ${t.autoSubmitBids ? '🟢 روشن' : '🔒 خاموش'} — مؤثر: ${bidEff ? '✅ باز' : '❌ قفل'}`,
+    `• خواندن اعلان: ${t.autoMarkNotificationsRead ? '🟢 روشن' : '🔒 خاموش'} — مؤثر: ${readEff ? '✅ باز' : '❌ قفل'}`,
     '',
+    'برای باز شدن مؤثر پیام/پیشنهاد: حالت اجرا باید «خودکار» باشد.',
+    'روشن کردن پیام/پیشنهاد نیاز به تأیید جداگانه دارد (دکمه را بزنید).',
     'حتی روشن هم بدون قانون و سقف کار نمی‌کند.',
+    'ارسال زنده پیام همچنان به ALLOW_LIVE_AUTO_SEND وابسته است (پیش‌فرض خاموش/امن).',
     'پیشنهاد زنده جداگانه در «کنترل سیستم → عملیات» است.',
+  ].join('\n');
+}
+
+export function formatToggleConfirmCard(name, s = {}) {
+  const mode = s.executionMode || s.mode || 'manual';
+  const isMsg = name === 'autoReplyMessages';
+  const title = isMsg ? 'پاسخ خودکار پیام' : 'پیشنهاد خودکار';
+  const needAuto = mode !== 'auto';
+  return [
+    `⚠️ تأیید باز کردن: ${title}`,
+    '————————',
+    '',
+    `حالت اجرا الان: ${modeLabelFa(mode)}`,
+    needAuto
+      ? 'قفل مؤثر تا وقتی حالت «خودکار» نباشد باز نمی‌شود.'
+      : 'حالت اجرا مناسب است — پس از تأیید، سوئیچ روشن می‌شود.',
+    '',
+    isMsg
+      ? 'ارسال زنده واقعی همچنان به قانون پیام + سقف + ALLOW_LIVE_AUTO_SEND نیاز دارد.'
+      : 'ثبت زنده پیشنهاد به قانون پیشنهاد + سقف + ALLOW_LIVE_AUTO_BID نیاز دارد.',
+    '',
+    'متوجهید و می‌خواهید ادامه دهید؟',
   ].join('\n');
 }
 
