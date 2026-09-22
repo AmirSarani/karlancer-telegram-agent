@@ -18,6 +18,9 @@ import {
   formatHelp,
   formatSettingsCard,
   formatModeCard,
+  formatChatAiModeCard,
+  chatAiModeInlineKeyboard,
+  chatAiModeLabelFa,
   formatRulesCard,
   formatTogglesCard,
   formatEmergencyCard,
@@ -518,7 +521,26 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     await editOrReply(ctx, text, { reply_markup }, { edit });
   }
 
-  async function replyMode(ctx, { edit = false } = {}) {
+  
+  async function replyChatAiMode(ctx, { edit = false } = {}) {
+    const exec = gate ? gate.settings.get() : { chatAiMode: 'full_manual' };
+    const text = formatChatAiModeCard({
+      chatAiMode: exec.chatAiMode || 'full_manual',
+      emergencyStop: exec.emergencyStop,
+    });
+    const extra = { reply_markup: chatAiModeInlineKeyboard(exec.chatAiMode || 'full_manual') };
+    if (edit && ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, extra);
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    await ctx.reply(text, { ...menuOpts(), ...extra });
+  }
+
+async function replyMode(ctx, { edit = false } = {}) {
     const exec = gate ? gate.settings.get() : { mode: 'manual' };
     await editOrReply(
       ctx,
@@ -1058,6 +1080,10 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     if (action === 'approvals') return replyApprovals(ctx);
     if (action === 'opportunities') return replyOpportunitiesHub(ctx);
     if (action === 'inbox') return replyDecisionInbox(ctx);
+    if (action === 'answered') {
+      if (!roomFlows) return ctx.reply('در دسترس نیست.', menuOpts());
+      return roomFlows.replyAnsweredList(ctx);
+    }
     if (action === 'chats') {
       if (!roomFlows) return ctx.reply('گفتگوها در دسترس نیست.', menuOpts());
       return roomFlows.replyRoomsList(ctx, { unreadOnly: false });
@@ -1673,7 +1699,40 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       return;
     }
 
-    if (parsed.type === 'set_mode') {
+    
+    if (parsed.type === 'set_chat_ai_mode') {
+      await ctx.answerCallbackQuery({ text: 'حالت AI گفتگو…' });
+      if (!gate) {
+        await ctx.reply('تنظیمات در دسترس نیست.', menuOpts());
+        return;
+      }
+      try {
+        gate.settings.setChatAiMode(parsed.mode);
+      } catch (e) {
+        await ctx.reply('حالت نامعتبر بود.', menuOpts());
+        return;
+      }
+      await replyChatAiMode(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_chatmode') {
+      await ctx.answerCallbackQuery();
+      await replyChatAiMode(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'goto_answered') {
+      await ctx.answerCallbackQuery({ text: 'جواب‌داده‌شده‌ها…' });
+      if (!roomFlows) {
+        await ctx.reply('در دسترس نیست.', menuOpts());
+        return;
+      }
+      await roomFlows.replyAnsweredList(ctx, { edit: true });
+      return;
+    }
+
+if (parsed.type === 'set_mode') {
       await ctx.answerCallbackQuery({ text: 'حالت…' });
       await doSetMode(ctx, parsed.mode, { edit: true });
       return;
@@ -1871,7 +1930,20 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       await renderScanView(ctx, 'room_details', { edit: true, roomId: parsed.roomId });
       return;
     }
-    if (parsed.type === 'room_done') {
+    
+    if (parsed.type === 'room_pick') {
+      await ctx.answerCallbackQuery({ text: 'انتخاب شد' });
+      if (!roomFlows) return;
+      await roomFlows.acceptPick(ctx, parsed.roomId);
+      return;
+    }
+    if (parsed.type === 'room_skip') {
+      await ctx.answerCallbackQuery({ text: 'رد شد' });
+      if (!roomFlows) return;
+      await roomFlows.skipPick(ctx, parsed.roomId);
+      return;
+    }
+if (parsed.type === 'room_done') {
       await ctx.answerCallbackQuery({ text: 'بررسی شد' });
       if (roomFlows?.roomState?.setDecision) {
         roomFlows.roomState.setDecision(parsed.roomId, {

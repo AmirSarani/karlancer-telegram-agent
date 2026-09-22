@@ -14,13 +14,13 @@ import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
 import { notifyOwner, notifyAllOwners, editOwnerMessage } from './telegram/notify.js';
 import { notifyBaleOwners } from './telegram/bale-notify.js';
-import { createLiveAutoBidRef, readLiveAutoBidFlag } from './telegram/live-auto-flag.js';
+import { createLiveAutoBidRef, createLiveAutoSendRef, readLiveAutoBidFlag, readLiveAutoSendFlag } from './telegram/live-auto-flag.js';
 import { createSessionHealthMonitor } from './security/session-health.js';
 import { createPermissionGate } from './telegram/permission-gate.js';
 import { createMutationRequester } from './telegram/mutation-request.js';
 import { maybeNotifySessionExpired } from './telegram/relogin-flow.js';
 import { formatScanSummary, afterScanInlineKeyboard, buildScanResultMessage } from './telegram/ui.js';
-import { formatRoomCard, roomCardKeyboard } from './telegram/room-card.js';
+import { formatRoomCard, roomCardKeyboard, roomPickKeyboard } from './telegram/room-card.js';
 import { createRoomState } from './agent/room-state.js';
 
 async function main() {
@@ -38,6 +38,9 @@ async function main() {
   const db = openDb(config.dbPath);
   const liveAutoRef = createLiveAutoBidRef(
     readLiveAutoBidFlag(db, { envDefault: Boolean(config.allowLiveAutoBid) })
+  );
+  const liveAutoSendRef = createLiveAutoSendRef(
+    readLiveAutoSendFlag(db, { envDefault: Boolean(config.allowLiveAutoSend) })
   );
   const morningDigestRef = { current: null };
   const baleTokenRef = { current: config.baleBotToken || '' };
@@ -169,12 +172,29 @@ async function main() {
         const first = notifiedMsgIds.values().next().value;
         notifiedMsgIds.delete(first);
       }
-      const text = formatRoomCard({ ...card, sendApiLive: Boolean(card.sendApiLive) });
+      const enriched = {
+        ...card,
+        sendApiLive: Boolean(card.sendApiLive),
+        chatAiModeFa: card.chatAiModeFa,
+        suggestedPriceFa: card.suggestedPriceFa,
+        analysisSummary: card.analysisSummary,
+        pickPrompt: Boolean(card.pickPrompt),
+        threadPhase: card.threadPhase,
+      };
+      // Skip noisy notify for silent auto-sent continuum (optional audit-only)
+      if (card.continuumAction === 'auto_sent') {
+        logger.info('telegram_room_auto_sent', { roomId: card.roomId });
+      }
+      const text = formatRoomCard(enriched);
+      const markup =
+        card.pickPrompt || card.continuumAction === 'pick_to_answer' || card.continuumAction === 'auto_hitl'
+          ? roomPickKeyboard(card.roomId)
+          : roomCardKeyboard(card.roomId);
       const res = await notifyAllOwners({
         token: config.telegramBotToken,
         chatIds: config.telegramOwnerChatIds || [config.telegramOwnerChatId],
         text,
-        reply_markup: roomCardKeyboard(card.roomId),
+        reply_markup: markup,
       });
       if (!res.ok) {
         logger.warn('telegram_room_card_notify_failed', { roomId: card.roomId, error: res.errors?.[0] });
@@ -242,6 +262,9 @@ async function main() {
       await notifyAllOwnersChannels(text);
     },
     allowLiveAutoBid: liveAutoRef.get(),
+    allowLiveAutoSend: liveAutoSendRef.get(),
+    getAllowLiveAutoSend: () => liveAutoSendRef.get(),
+    gate,
     getAllowLiveAutoBid: () => liveAutoRef.get(),
     leaseMs: 60_000,
     pollMs: 500,
@@ -292,6 +315,9 @@ async function main() {
       hooks: {
         envFile: path.join(config.root, '.env'),
         allowLiveAutoBid: liveAutoRef.get(),
+    allowLiveAutoSend: liveAutoSendRef.get(),
+    getAllowLiveAutoSend: () => liveAutoSendRef.get(),
+    gate,
         getAllowLiveAutoBid: () => liveAutoRef.get(),
         setAllowLiveAutoBid: (v) => liveAutoRef.set(v),
         getMorningDigest: () => morningDigestRef.current,

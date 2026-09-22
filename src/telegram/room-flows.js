@@ -15,6 +15,8 @@ import {
   formatRoomMessagesView,
   formatDraftScreen,
   roomCardKeyboard,
+  roomPickKeyboard,
+  roomAnsweredOpenKeyboard,
   roomConfirmKeyboard,
   roomDraftKeyboard,
   roomMessagesKeyboard,
@@ -301,6 +303,13 @@ export function createRoomFlows(deps) {
       status: live ? 'approved' : 'blocked',
       detail: live ? null : 'blocked_by_missing_api',
     });
+
+    if (live) {
+      roomState.markAnswered(roomId, {
+        lastSentText: text,
+        summary: roomState.getThread(roomId)?.summary || null,
+      });
+    }
 
     if (!live) {
       const msg = [
@@ -601,11 +610,70 @@ export function createRoomFlows(deps) {
     );
   }
 
+
+  async function replyAnsweredList(ctx, { edit = false, page = 1 } = {}) {
+    const title = '✅ جواب‌داده‌شده‌ها';
+    const ids = roomState.listAnsweredRoomIds();
+    const rooms = [];
+    for (const id of ids) {
+      const card = roomState.getCard(id);
+      const thread = roomState.getThread(id);
+      rooms.push({
+        id,
+        roomId: id,
+        guestName: card?.guestName || card?.guest_name || `گفتگو ${id}`,
+        unread: 0,
+        lastMessage: thread?.lastSentText || card?.draftText || '',
+        updatedAt: thread?.lastSentAt || card?.updatedAt || null,
+        threadPhase: 'answered',
+      });
+    }
+    // newest first
+    rooms.sort((a, b) => (Date.parse(b.updatedAt || '') || 0) - (Date.parse(a.updatedAt || '') || 0));
+    const formatted = formatRoomsList(rooms, { title, page, unreadOnly: false });
+    await editOrReply(ctx, formatted.text || (title + '\n————————\nهنوز موردی نیست.'), {
+      reply_markup: formatted.keyboard,
+    }, { edit });
+  }
+
+  async function markRoomAnsweredManual(ctx, roomId) {
+    const draft = roomState.getDraft(roomId);
+    roomState.markAnswered(roomId, {
+      lastSentText: draft?.text || roomState.getCard(roomId)?.draftText || null,
+    });
+    await editOrReply(
+      ctx,
+      ['✅ به جواب‌داده‌شده‌ها منتقل شد.', `گفتگو: ${roomId}`].join('\n'),
+      { reply_markup: roomCardKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) }
+    );
+  }
+
+  /** Owner picked «جواب بدم» → open draft / confirm path */
+  async function acceptPick(ctx, roomId) {
+    roomState.setDecision(roomId, { status: 'pending', detail: 'picked_to_answer' });
+    await replyDraftScreen(ctx, roomId, { edit: Boolean(ctx.callbackQuery) });
+  }
+
+  async function skipPick(ctx, roomId) {
+    roomState.setDecision(roomId, { status: 'rejected', detail: 'pick_skipped' });
+    await editOrReply(
+      ctx,
+      '⏭ فعلاً رد شد. هر وقت خواستید از گفتگوها باز کنید.',
+      { reply_markup: roomCardKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) }
+    );
+  }
+
   return {
     roomState,
     gate,
     mutations,
     replyRoomsList,
+    replyAnsweredList,
+    markRoomAnsweredManual,
+    acceptPick,
+    skipPick,
     replyRoomCard,
     replyRoomMessages,
     replyRoomTech,

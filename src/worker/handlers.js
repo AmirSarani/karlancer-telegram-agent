@@ -217,7 +217,21 @@ export async function handleJob(ctx, job) {
 
     case 'messages.poll': {
       const roomState = createRoomState(db);
-      const out = await runMessagesPoll({ api, db, roomState }, p);
+      const out = await runMessagesPoll(
+        {
+          api,
+          db,
+          roomState,
+          llm: ctx.llm || null,
+          gate: ctx.gate || null,
+          mutations: ctx.mutations || null,
+          getAllowLiveAutoSend:
+            typeof ctx.getAllowLiveAutoSend === 'function'
+              ? ctx.getAllowLiveAutoSend
+              : () => Boolean(ctx.allowLiveAutoSend),
+        },
+        p
+      );
       if (!out.ok) {
         return { ok: false, errorCode: out.errorCode, detail: out.detail };
       }
@@ -230,6 +244,8 @@ export async function handleJob(ctx, job) {
         sendApiLive: out.result.sendApiLive,
         cards: out.result.cards,
         priorityUnread: out.result.priorityUnread,
+        chatAiMode: out.result.chatAiMode,
+        continuumActions: out.result.continuumActions,
       });
       return out;
     }

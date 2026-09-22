@@ -41,6 +41,10 @@ const seenKey = (roomId) => `room:${roomId}:seen_ids`;
 const pendingIndexKey = 'rooms:pending_decisions';
 const pollHealthKey = 'messages_poll_health';
 const awaitingNoteKey = (userId) => `tg:awaiting_note:${userId}`;
+const threadKey = (roomId) => `room:${roomId}:thread`;
+const answeredIndexKey = 'rooms:answered';
+
+/** @typedef {'new'|'pending'|'answered'|'active_thread'} RoomPhase */
 
 /**
  * @param {import('better-sqlite3').Database} db
@@ -184,6 +188,110 @@ export function createRoomState(db) {
       } catch {
         /* ignore */
       }
+    },
+
+    /**
+     * Continuum memory for a chat thread.
+     * @returns {{
+     *   phase: RoomPhase,
+     *   summary: string|null,
+     *   lastSentText: string|null,
+     *   lastDraftText: string|null,
+     *   lastSentAt: string|null,
+     *   lastInboundAt: string|null,
+     *   notes: string|null,
+     *   suggestedPrice: number|null,
+     *   updatedAt: string|null,
+     * }}
+     */
+    getThread(roomId) {
+      const row = kvGet(db, threadKey(roomId));
+      const v = row?.value && typeof row.value === 'object' ? row.value : {};
+      return {
+        phase: v.phase || 'new',
+        summary: v.summary || null,
+        lastSentText: v.lastSentText || null,
+        lastDraftText: v.lastDraftText || null,
+        lastSentAt: v.lastSentAt || null,
+        lastInboundAt: v.lastInboundAt || null,
+        notes: v.notes || null,
+        suggestedPrice: v.suggestedPrice ?? null,
+        updatedAt: v.updatedAt || row?.updatedAt || null,
+      };
+    },
+
+    setThread(roomId, patch = {}) {
+      const cur = this.getThread(roomId);
+      const next = {
+        ...cur,
+        ...patch,
+        phase: patch.phase || cur.phase || 'new',
+        updatedAt: nowIso(),
+      };
+      kvSet(db, threadKey(roomId), next);
+      if (next.phase === 'answered') this._syncAnsweredIndex(roomId, true);
+      else if (patch.phase && patch.phase !== 'answered') this._syncAnsweredIndex(roomId, false);
+      return next;
+    },
+
+    touchInbound(roomId, { at = null, summary = null } = {}) {
+      const cur = this.getThread(roomId);
+      const phase =
+        cur.phase === 'answered' || cur.phase === 'active_thread' || cur.lastSentAt
+          ? 'active_thread'
+          : cur.phase === 'new'
+            ? 'pending'
+            : cur.phase || 'pending';
+      return this.setThread(roomId, {
+        lastInboundAt: at || nowIso(),
+        phase,
+        ...(summary != null ? { summary: String(summary).slice(0, 2000) } : {}),
+      });
+    },
+
+    /**
+     * Mark room answered after successful send or owner mark.
+     */
+    markAnswered(roomId, { lastSentText = null, summary = null } = {}) {
+      const draft = this.getDraft(roomId);
+      const note = this.getNote(roomId);
+      const next = this.setThread(roomId, {
+        phase: 'answered',
+        lastSentAt: nowIso(),
+        lastSentText:
+          lastSentText != null
+            ? String(lastSentText).slice(0, 4000)
+            : draft?.text
+              ? String(draft.text).slice(0, 4000)
+              : null,
+        lastDraftText: draft?.text ? String(draft.text).slice(0, 4000) : null,
+        notes: note?.text ? String(note.text).slice(0, 2000) : null,
+        ...(summary != null ? { summary: String(summary).slice(0, 2000) } : {}),
+      });
+      this.setDecision(roomId, { status: 'answered', detail: 'owner_or_send' });
+      return next;
+    },
+
+    _syncAnsweredIndex(roomId, isAnswered) {
+      const row = kvGet(db, answeredIndexKey);
+      let ids = Array.isArray(row?.value?.ids) ? row.value.ids.map(String) : [];
+      const rid = String(roomId);
+      if (isAnswered) {
+        if (!ids.includes(rid)) ids.push(rid);
+      } else {
+        ids = ids.filter((x) => x !== rid);
+      }
+      if (ids.length > 300) ids = ids.slice(-300);
+      kvSet(db, answeredIndexKey, { ids, updatedAt: nowIso() });
+    },
+
+    listAnsweredRoomIds() {
+      const row = kvGet(db, answeredIndexKey);
+      return Array.isArray(row?.value?.ids) ? row.value.ids.map(String) : [];
+    },
+
+    answeredCount() {
+      return this.listAnsweredRoomIds().length;
     },
   };
 }

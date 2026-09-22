@@ -6,6 +6,9 @@ import crypto from 'node:crypto';
 
 export const SETTINGS_KV_KEY = 'agent_execution_settings';
 export const MODES = Object.freeze(['manual', 'assisted', 'auto']);
+/** Chat engagement AI modes (Persian UX) — independent of execution mode. */
+export const CHAT_AI_MODES = Object.freeze(['full_manual', 'pick_to_answer', 'full_auto']);
+/** @typedef {'full_manual'|'pick_to_answer'|'full_auto'} ChatAiMode */
 
 /** @typedef {'manual'|'assisted'|'auto'} ExecutionMode */
 
@@ -16,6 +19,8 @@ export const MODES = Object.freeze(['manual', 'assisted', 'auto']);
 export function defaultAgentSettings() {
   return {
     mode: 'manual',
+    /** AI chat engagement: full_manual | pick_to_answer | full_auto */
+    chatAiMode: 'full_manual',
     emergencyStop: false,
     emergencyStoppedAt: null,
     toggles: {
@@ -67,6 +72,7 @@ export function normalizeAgentSettings(raw) {
   const d = defaultAgentSettings();
   if (!raw || typeof raw !== 'object') return d;
   const mode = MODES.includes(raw.mode) ? raw.mode : d.mode;
+  const chatAiMode = CHAT_AI_MODES.includes(raw.chatAiMode) ? raw.chatAiMode : d.chatAiMode;
   const toggles = { ...d.toggles, ...(raw.toggles || {}) };
   const limits = {
     maxAutoMessagesPerDay: clampInt(
@@ -99,6 +105,7 @@ export function normalizeAgentSettings(raw) {
   };
   return {
     mode,
+    chatAiMode,
     emergencyStop: Boolean(raw.emergencyStop),
     emergencyStoppedAt: raw.emergencyStoppedAt || null,
     toggles: {
@@ -184,6 +191,10 @@ export function createAgentSettingsStore(db, { tenantId = 'default' } = {}) {
       if (!MODES.includes(mode)) throw new Error('invalid_mode');
       return update({ mode });
     },
+    setChatAiMode(chatAiMode) {
+      if (!CHAT_AI_MODES.includes(chatAiMode)) throw new Error('invalid_chat_ai_mode');
+      return update({ chatAiMode });
+    },
     setToggle(name, value) {
       const allowed = ['autoReplyMessages', 'autoSubmitBids', 'autoMarkNotificationsRead'];
       if (!allowed.includes(name)) throw new Error('invalid_toggle');
@@ -194,6 +205,8 @@ export function createAgentSettingsStore(db, { tenantId = 'default' } = {}) {
         emergencyStop: true,
         emergencyStoppedAt: new Date().toISOString(),
         mode: 'manual',
+    /** AI chat engagement: full_manual | pick_to_answer | full_auto */
+    chatAiMode: 'full_manual',
         toggles: {
           autoReplyMessages: false,
           autoSubmitBids: false,

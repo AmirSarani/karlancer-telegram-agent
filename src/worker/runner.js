@@ -15,6 +15,7 @@ import { createLlmProvider, recordTokenUsage } from '../llm/provider.js';
 import { TokenBudgetManager } from '../intelligence/token-budget.js';
 import { createPermissionGate } from '../telegram/permission-gate.js';
 import { createMutationRequester } from '../telegram/mutation-request.js';
+import { readLiveAutoSendFlag } from '../telegram/live-auto-flag.js';
 import { notifyAllOwners } from '../telegram/notify.js';
 import { notifyBaleOwners } from '../telegram/bale-notify.js';
 
@@ -187,15 +188,22 @@ if (isMain) {
       });
     }
   }
+  const allowLiveAutoSend = readLiveAutoSendFlag(db, {
+    envDefault: Boolean(config.allowLiveAutoSend),
+  });
   const worker = createWorker({
     db,
     queue,
     api,
     llm,
     budget,
+    gate,
     mutations,
     notifyOpportunity,
     allowLiveAutoBid: Boolean(config.allowLiveAutoBid),
+    allowLiveAutoSend,
+    getAllowLiveAutoSend: () =>
+      readLiveAutoSendFlag(db, { envDefault: Boolean(config.allowLiveAutoSend) }),
     leaseMs: 60_000,
     pollMs: 400,
     onEvent: async (type, payload) => {

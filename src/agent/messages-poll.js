@@ -11,16 +11,25 @@ import { buildDraftReply } from './draft-api.js';
 import { extractProposalHints } from '../telegram/room-card.js';
 import { getVerifiedMutation } from '../api/contracts/verified-mutation.js';
 import { logger } from '../observability/logger.js';
+import { createChatContinuum } from './chat-continuum.js';
 
 /**
  * @param {object} ctx
  * @param {object} ctx.api
  * @param {import('better-sqlite3').Database} ctx.db
  * @param {ReturnType<import('./room-state.js').createRoomState>} ctx.roomState
+ * @param {object|null} [ctx.llm]
+ * @param {object|null} [ctx.gate]
+ * @param {object|null} [ctx.mutations]
+ * @param {() => boolean} [ctx.getAllowLiveAutoSend]
  * @param {object} [payload]
  */
 export async function runMessagesPoll(ctx, payload = {}) {
-  const { api, roomState } = ctx;
+  const { api, roomState, db, llm = null, gate = null, mutations = null } = ctx;
+  const getAllowLiveAutoSend =
+    typeof ctx.getAllowLiveAutoSend === 'function'
+      ? ctx.getAllowLiveAutoSend
+      : () => false;
   const page = payload.page || 1;
   const maxRooms = Math.min(20, Number(payload.maxRooms) || 10);
   const forceRoomId = payload.roomId != null ? String(payload.roomId) : null;
@@ -224,11 +233,36 @@ export async function runMessagesPoll(ctx, payload = {}) {
     ...summary,
   });
 
+  // Mode-aware continuum: LLM / pick / auto (never unlimited)
+  let cards = newInboundCards;
+  if (cards.length && db) {
+    try {
+      const continuum = createChatContinuum({
+        db,
+        roomState,
+        llm,
+        gate,
+        mutations,
+        getAllowLiveAutoSend,
+      });
+      cards = await continuum.processPollCards(cards);
+      summary.newCards = cards.length;
+      summary.chatAiMode = continuum.getMode();
+      summary.continuumActions = cards.map((c) => ({
+        roomId: c.roomId,
+        action: c.continuumAction,
+        pick: Boolean(c.pickPrompt),
+      }));
+    } catch (e) {
+      logger.warn('messages_poll_continuum_failed', { err: e.message });
+    }
+  }
+
   return {
     ok: true,
     result: {
       ...summary,
-      cards: newInboundCards,
+      cards,
     },
   };
 }

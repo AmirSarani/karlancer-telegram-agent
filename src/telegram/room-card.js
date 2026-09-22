@@ -55,6 +55,32 @@ export function roomCardKeyboard(roomId) {
 }
 
 /**
+ * Pick-to-answer card — «جواب بدم؟»
+ * @param {string|number} roomId
+ */
+export function roomPickKeyboard(roomId) {
+  const id = String(roomId);
+  return addPairs(new InlineKeyboard(), [
+    ['✅ جواب بدم', `room:pick:${id}`],
+    ['⏭ بعداً', `room:skip:${id}`],
+    ['👁 مشاهده', `room:msg:${id}`],
+    ['🤖 تحلیل', `room:ai:${id}`],
+    ['⬅️ گفتگوها', 'goto:chats'],
+    ['🏠 خانه', 'nav:home'],
+  ]);
+}
+
+/**
+ * Answered-list open keyboard
+ */
+export function roomAnsweredOpenKeyboard(roomId) {
+  return new InlineKeyboard()
+    .text('👁 مشاهده', `room:open:${roomId}`)
+    .text('💬 ادامه', `room:dft:${roomId}`);
+}
+
+
+/**
  * Draft reply screen keyboard.
  * ✅ تأیید → existing approval path (room:ok → confirm preview).
  * @param {string|number} roomId
@@ -162,7 +188,7 @@ export function roomsListKeyboard(pageRooms, { page = 1, totalPages = 1, unreadO
 export function parseRoomCallback(data) {
   if (typeof data !== 'string' || !data) return null;
   const m =
-    /^room:(open|ok|no|note|ref|ai|cfm|ccl|done|msg|dft|tch|rgn|snd|rule):([0-9A-Za-z_-]{1,24})$/.exec(
+    /^room:(ai|ccl|cfm|dft|done|msg|no|note|ok|open|pick|ref|rgn|rule|skip|snd|tch):([0-9A-Za-z_-]{1,24})$/.exec(
       data
     );
   if (!m) return null;
@@ -176,6 +202,8 @@ export function parseRoomCallback(data) {
     cfm: 'room_confirm_send',
     ccl: 'room_cancel_confirm',
     done: 'room_done',
+    pick: 'room_pick',
+    skip: 'room_skip',
     msg: 'room_messages',
     dft: 'room_draft',
     tch: 'room_tech',
@@ -322,6 +350,18 @@ export function formatRoomCard(card = {}) {
     lines.push(`• پیام جدید: ${toFaNum(unread)}`);
   }
   lines.push(decisionLine(decision));
+  if (card.threadPhase === 'answered') lines.push('• فاز: ✅ جواب‌داده‌شده');
+  else if (card.threadPhase === 'active_thread') lines.push('• فاز: 🔁 ادامه گفتگو');
+  if (card.chatAiModeFa) lines.push(`• حالت AI چت: ${card.chatAiModeFa}`);
+  if (card.analysisSummary) {
+    lines.push('', '🧠 خلاصه AI', truncatePersianText(String(card.analysisSummary), { max: 220, lines: 3 }));
+  }
+  if (card.suggestedPriceFa) {
+    lines.push(`• قیمت پیشنهادی (داخلی): ${card.suggestedPriceFa}`);
+  }
+  if (card.pickPrompt) {
+    lines.push('', '❓ جواب بدم؟ از دکمه‌ها یکی را انتخاب کنید.');
+  }
 
   const msgBlock = formatLastMessagesBlock(messages, { max: 5 });
   if (msgBlock) {
@@ -609,6 +649,7 @@ function riskEmoji(risk) {
 }
 
 function decisionLine(status) {
+  if (status === 'answered') return '• وضعیت: ✅ جواب داده شد';
   if (status === 'approved') return '• وضعیت: ✅ تأیید شده';
   if (status === 'rejected') return '• وضعیت: ❌ رد شده';
   if (status === 'blocked') return '• وضعیت: ⛔ ارسال فعلاً فعال نیست';
@@ -652,6 +693,8 @@ export function extractProposalHints(text) {
 
 export default {
   roomCardKeyboard,
+  roomPickKeyboard,
+  roomAnsweredOpenKeyboard,
   roomDraftKeyboard,
   roomMessagesKeyboard,
   roomTechKeyboard,

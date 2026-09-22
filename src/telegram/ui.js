@@ -57,6 +57,7 @@ export {
 /** Reply-keyboard button labels (exact match for hears / text map). Max 6 main items. */
 export const BTN = Object.freeze({
   DASHBOARD: '📊 داشبورد',
+  ANSWERED: '✅ جواب‌داده‌شده‌ها',
   CHATS: '💬 گفتگوها',
   OPPORTUNITIES: '🔥 فرصت‌ها',
   INBOX: '📥 صندوق',
@@ -166,7 +167,9 @@ export function statusInlineKeyboard({ pendingCount = 0 } = {}) {
   }
   kb.row()
     .text('💬 گفتگوها', 'goto:chats')
-    .text('🔥 مهم‌ها', 'goto:unread');
+    .text('🔥 مهم‌ها', 'goto:unread')
+    .row()
+    .text('✅ جواب‌داده‌شده‌ها', 'goto:answered');
   return kb;
 }
 
@@ -198,6 +201,9 @@ export function settingsInlineKeyboard(agentState = 'running', exec = {}) {
     .row()
     .text('🔴 خودکار', 'mode:auto')
     .text('📜 قوانین خودکار', 'nav:rules')
+    .row()
+    .text('🤖 حالت AI گفتگو', 'nav:chatmode')
+    .text('✅ جواب‌داده‌شده‌ها', 'goto:answered')
     .row();
   if (exec.emergencyStop) {
     kb.text('▶️ رفع توقف اضطراری', 'set:emerg_clear');
@@ -351,6 +357,11 @@ export function parseCallbackData(data) {
   if (data === 'set:emerg') return { type: 'set_emergency' };
   if (data === 'set:emerg_clear') return { type: 'set_emergency_clear' };
   if (data === 'nav:rules') return { type: 'nav_rules' };
+  if (data === 'nav:chatmode') return { type: 'nav_chatmode' };
+  if (data === 'goto:answered') return { type: 'goto_answered' };
+  if (data === 'chatmode:full_manual' || data === 'chatmode:pick_to_answer' || data === 'chatmode:full_auto') {
+    return { type: 'set_chat_ai_mode', mode: data.slice('chatmode:'.length) };
+  }
   if (data === 'opp:hub') return { type: 'opp_hub' };
   if (data === 'nav:toggles') return { type: 'nav_toggles' };
   if (data === 'nav:mode') return { type: 'nav_mode' };
@@ -578,6 +589,49 @@ export function modeLabelFa(mode) {
   return '🟢 دستی';
 }
 
+
+export function chatAiModeLabelFa(mode) {
+  if (mode === 'pick_to_answer') return '🟡 انتخابی';
+  if (mode === 'full_auto') return '🔴 خودکار';
+  return '🟢 کاملاً دستی';
+}
+
+export function formatChatAiModeCard(s = {}) {
+  const mode = s.chatAiMode || 'full_manual';
+  return [
+    '🤖 حالت AI گفتگو',
+    '————————',
+    '',
+    `فعلی: ${chatAiModeLabelFa(mode)}`,
+    '',
+    '🟢 کاملاً دستی — فقط اعلان؛ تحلیل/ارسال با دستور شما',
+    '🟡 انتخابی — تحلیل+پیش‌نویس+قیمت؛ شما انتخاب می‌کنید «جواب بدم؟»',
+    '🔴 خودکار — تحلیل+دروازه مجوز+سقف روزانه (هرگز نامحدود)',
+    '',
+    'امنیت: توقف اضطراری، بلک‌لیست، قرارداد تأییدشده، پرچم ALLOW_LIVE_AUTO_SEND',
+    s.emergencyStop ? '\n🛑 توقف اضطراری فعال است.' : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+export function chatAiModeInlineKeyboard(current = 'full_manual') {
+  const mark = (m) => (current === m ? '✓ ' : '');
+  return new InlineKeyboard()
+    .text(`${mark('full_manual')}🟢 دستی`, 'chatmode:full_manual')
+    .row()
+    .text(`${mark('pick_to_answer')}🟡 انتخابی`, 'chatmode:pick_to_answer')
+    .row()
+    .text(`${mark('full_auto')}🔴 خودکار`, 'chatmode:full_auto')
+    .row()
+    .text('📜 قوانین AI', 'nav:rules')
+    .text('✅ جواب‌داده‌شده‌ها', 'goto:answered')
+    .row()
+    .text('⬅️ تنظیمات', 'nav:set')
+    .text('🏠 خانه', 'nav:home');
+}
+
+
 export function lockAutoFa(on) {
   return on ? '🟢 خودکار' : '🔒 قفل (نیاز به تأیید)';
 }
@@ -601,7 +655,8 @@ export function formatSettingsCard(s = {}) {
     '',
     '🎛 وضعیت',
     `• ایجنت: ${stateFa}`,
-    `• حالت: ${modeLabelFa(mode)}`,
+    `• حالت اجرا: ${modeLabelFa(mode)}`,
+    `• حالت AI گفتگو: ${chatAiModeLabelFa(s.chatAiMode || 'full_manual')}`,
     s.emergencyStop ? '• 🛑 توقف اضطراری: فعال' : '• توقف اضطراری: خاموش',
     liveLine,
     '',
