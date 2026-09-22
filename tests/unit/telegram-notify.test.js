@@ -75,8 +75,9 @@ test('formatStatusCard shows کارلنسر متصل/قطع and last scan', () =
   });
   assert.match(connected, /کارلنسر: ✅ متصل/);
   assert.match(connected, /آخرین اسکن/);
-  assert.match(connected, /خوانده‌نشده اسکن: 1/);
+  assert.match(connected, /پیام جدید|خوانده/);
   assert.match(connected, /سیستم سالم/);
+  assert.doesNotMatch(connected, /\bworker\b|playwright|openai/i);
 
   const cut = formatStatusCard({ karlancerAuth: false });
   assert.match(cut, /کارلنسر: ❌ قطع/);
@@ -85,6 +86,7 @@ test('formatStatusCard shows کارلنسر متصل/قطع and last scan', () =
 test('formatWelcome includes karlancer line', () => {
   assert.match(formatWelcome({ karlancerAuth: true }), /کارلنسر: متصل/);
   assert.match(formatWelcome({ karlancerAuth: false }), /کارلنسر: قطع/);
+  assert.match(formatWelcome({ karlancerAuth: true }), /سیستم|احراز/);
 });
 
 test('afterScanInlineKeyboard is scan mini-dashboard actions', () => {

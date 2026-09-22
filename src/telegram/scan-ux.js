@@ -99,7 +99,34 @@ export function priorityReasonLabel(room = {}) {
   if (Number(room.unread) > 0) return 'پیام جدید';
   if (room.keywordMatched || room.matched) return 'تطابق کلیدواژه';
   if (room.related || room.isRelated) return 'مرتبط';
-  return 'ℹ️ برای بررسی انتخاب شده';
+  return 'برای بررسی انتخاب شده';
+}
+
+/**
+ * Priority badge — never bare ⚪. Uses real signals only (no invented scores).
+ * @param {object} room
+ * @returns {{ emoji: string, label: string, line: string }}
+ */
+export function priorityBadge(room = {}) {
+  const unread = Number(room.unread) > 0;
+  const important =
+    unread ||
+    room.important === true ||
+    room.isImportant === true ||
+    /مهم|فوری|urgent/i.test(String(room.reason || room.priorityReason || ''));
+  const review =
+    room.keywordMatched ||
+    room.matched ||
+    room.related ||
+    room.isRelated ||
+    room.needsReview === true;
+  if (important) {
+    return { emoji: '🔥', label: 'مهم', line: '🔥 مهم' };
+  }
+  if (review) {
+    return { emoji: '🟡', label: 'بررسی شود', line: '🟡 بررسی شود' };
+  }
+  return { emoji: '🔵', label: 'اطلاعاتی', line: '🔵 اطلاعاتی' };
 }
 
 /**
@@ -197,9 +224,9 @@ export function formatScanSummary(s = {}) {
     lines.push('', '🔝 موارد مهم:');
     for (let i = 0; i < show.length; i++) {
       const r = show[i];
-      const ur = Number(r.unread) > 0 ? '🔴' : '⚪';
+      const badge = priorityBadge(r);
       const preview = roomPreview(r);
-      lines.push(`${toFaNum(i + 1)}. ${ur} ${guestName(r)} — ${priorityReasonLabel(r)}`);
+      lines.push(`${toFaNum(i + 1)}. ${badge.line} · ${guestName(r)} — ${priorityReasonLabel(r)}`);
       if (preview) lines.push(`   «${preview}»`);
     }
     if (rooms.length > showMax) {
@@ -238,7 +265,7 @@ export function formatScanPriorityList(s = {}, { page = 1 } = {}) {
   const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms : [];
   if (!rooms.length) {
     return [
-      '🔴 اولویت‌ها',
+      '🔥 مهم‌ها / اولویت‌ها',
       '————————',
       '',
       'مورد اولویت‌داری در آخرین اسکن نبود.',
@@ -250,7 +277,7 @@ export function formatScanPriorityList(s = {}, { page = 1 } = {}) {
   const start = (safePage - 1) * PRIORITY_PAGE_SIZE;
   const slice = rooms.slice(start, start + PRIORITY_PAGE_SIZE);
   const lines = [
-    '🔴 اولویت‌ها',
+    '🔥 مهم‌ها / اولویت‌ها',
     '————————',
     '',
     `تعداد: ${toFaNum(rooms.length)} · صفحه ${toFaNum(safePage)}/${toFaNum(totalPages)}`,
@@ -258,9 +285,9 @@ export function formatScanPriorityList(s = {}, { page = 1 } = {}) {
   ];
   for (let i = 0; i < slice.length; i++) {
     const r = slice[i];
-    const ur = Number(r.unread) > 0 ? '🔴' : '⚪';
+    const badge = priorityBadge(r);
     const preview = roomPreview(r);
-    lines.push(`${toFaNum(start + i + 1)}. ${ur} ${guestName(r)}`);
+    lines.push(`${toFaNum(start + i + 1)}. ${badge.line} · ${guestName(r)}`);
     if (preview) lines.push(`   «${preview}»`);
     lines.push(`   ${priorityReasonLabel(r)}`);
   }
@@ -292,11 +319,11 @@ export function formatScanUnreadList(s = {}) {
   for (let i = 0; i < show.length; i++) {
     const r = show[i];
     const preview = roomPreview(r);
-    lines.push(`${toFaNum(i + 1)}. 🔴 ${guestName(r)} · ${toFaNum(r.unread)}`);
+    lines.push(`${toFaNum(i + 1)}. 🔥 مهم · ${guestName(r)} · ${toFaNum(r.unread)}`);
     if (preview) lines.push(`   «${preview}»`);
   }
   if (!show.length && unreadCount > 0) {
-    lines.push('جزئیات نام در اولویت‌ها نیست — از «هشدارها» ببینید.');
+    lines.push('جزئیات نام در اولویت‌ها نیست — از «مهم‌ها» ببینید.');
   }
   return lines.join('\n');
 }
@@ -329,29 +356,25 @@ export function formatScanRoomCard(room = {}, { showDetails = false } = {}) {
 }
 
 export function formatScanLoading(s = {}) {
-  const job = s.jobId ? String(s.jobId).slice(0, 8) : null;
-  const lines = [
+  void s;
+  return [
     '⏳ در حال اسکن…',
     '————————',
     '',
     'در حال بررسی گفتگوهای کارلنسر.',
     'این پیام با نتیجه نهایی جایگزین می‌شود.',
-  ];
-  if (job) lines.push(`job: ${job}…`);
-  return lines.join('\n');
+  ].join('\n');
 }
 
 export function formatScanAlreadyRunning(s = {}) {
-  const job = s.jobId ? String(s.jobId).slice(0, 8) : null;
-  const lines = [
+  void s;
+  return [
     '⏳ اسکن در حال اجراست',
     '————————',
     '',
     'اسکن دیگری هم‌اکنون در صف یا در حال اجراست.',
     'اسکن موازی شروع نشد — لطفاً صبر کنید.',
-  ];
-  if (job) lines.push(`job: ${job}…`);
-  return lines.join('\n');
+  ].join('\n');
 }
 
 export function formatScanError(s = {}) {
@@ -391,7 +414,7 @@ export function buildScanKeyboard(s = {}) {
   const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms : [];
   const unread = Number(s.unreadOnPage) || 0;
   const pairs = [];
-  if (rooms.length > 0) pairs.push([`🔴 اولویت‌ها (${toFaNum(rooms.length)})`, 'scan:priority']);
+  if (rooms.length > 0) pairs.push([`🔥 مهم‌ها (${toFaNum(rooms.length)})`, 'scan:priority']);
   if (unread > 0) pairs.push([`🔔 خوانده‌نشده (${toFaNum(unread)})`, 'scan:unread']);
   pairs.push(['💬 گفتگوها', 'scan:chats']);
   pairs.push(['📊 جزئیات', 'scan:details']);
@@ -475,7 +498,7 @@ export function buildScanUnreadKeyboard(s = {}) {
     kb.row();
   }
   return addPairs(kb, [
-    ['🔔 همه هشدارها', 'goto:unread'],
+    ['🔥 همه مهم‌ها', 'goto:unread'],
     ['◀️ بازگشت', 'scan:back'],
     ['🏠 خانه', 'nav:home'],
   ]);
@@ -548,6 +571,7 @@ export default {
   truncatePersianText,
   formatRelativeTime,
   priorityReasonLabel,
+  priorityBadge,
   deriveScanState,
   formatScanSummary,
   formatScanDetails,

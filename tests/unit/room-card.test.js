@@ -23,7 +23,9 @@ test('roomCardKeyboard has AI/note/approve/reject/back/home under 64 bytes', () 
   assert.ok(data.includes('room:ai:7241431'));
   assert.ok(data.includes('goto:chats'));
   assert.ok(data.includes('nav:home'));
+  assert.ok(data.includes('room:done:7241431'));
   for (const d of data) assert.ok(d.length <= 64);
+  for (const row of kb.inline_keyboard) assert.ok(row.length <= 2);
 });
 
 test('roomConfirmKeyboard confirm/cancel', () => {
@@ -59,6 +61,8 @@ test('formatRoomCard includes project budget and draft; redacts bearer', () => {
     sendApiLive: false,
   });
   assert.match(text, /7241431/);
+  assert.match(text, /شناسه گفتگو/);
+  assert.doesNotMatch(text, /گفتگو #7241431/);
   assert.match(text, /استخراج ایمیل/);
   assert.match(text, /بودجه/);
   assert.match(text, /تمام‌وقت/);
@@ -82,14 +86,18 @@ test('formatRoomsList empty, pagination, and keyboard', () => {
   const page1 = formatRoomsList(rooms, { page: 1, pageSize: 5 });
   assert.equal(page1.pageRooms.length, 5);
   assert.equal(page1.totalPages, 3);
-  assert.match(page1.text, /صفحه 1\/3/);
+  assert.match(page1.text, /صفحه (1|۱)\/(3|۳)/);
   const data = page1.keyboard.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(data.some((d) => d.startsWith('room:open:')));
+  assert.ok(data.some((d) => d.startsWith('room:ai:')));
+  assert.ok(data.some((d) => d.startsWith('room:note:')));
   assert.ok(data.includes('page:chats:2'));
   assert.ok(data.includes('nav:home'));
+  assert.doesNotMatch(page1.text, /#1\b/);
+  for (const row of page1.keyboard.inline_keyboard) assert.ok(row.length <= 2);
 
-  const unreadEmpty = formatRoomsList([], { title: '🔔 هشدارها', unreadOnly: true });
-  assert.match(unreadEmpty.text, /خوانده‌نشده|عالی/);
+  const unreadEmpty = formatRoomsList([], { title: '🔥 مهم‌ها', unreadOnly: true });
+  assert.match(unreadEmpty.text, /مهم|خوانده‌نشده|عالی/);
 });
 
 test('formatSendConfirmPreview is honest about blocked api', () => {
@@ -99,8 +107,9 @@ test('formatSendConfirmPreview is honest about blocked api', () => {
     draftText: 'سلام',
     sendApiLive: false,
   });
-  assert.match(text, /تأیید نهایی/);
+  assert.match(text, /تأیید/);
   assert.match(text, /blocked_by_missing_api/);
+  assert.match(text, /عملیات|مقصد|پیش‌نمایش/);
   assert.match(text, /سلام/);
 });
 

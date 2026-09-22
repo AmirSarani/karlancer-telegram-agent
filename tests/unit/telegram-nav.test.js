@@ -22,7 +22,7 @@ test('IA menu labels are Persian and max 6', () => {
 test('empty approvals and empty chats are friendly FA', () => {
   assert.match(formatApprovalsList([]).text, /خالی|نیست/);
   assert.match(formatRoomsList([], { unreadOnly: false }).text, /نیست|اسکن/);
-  assert.match(formatRoomsList([], { unreadOnly: true }).text, /خوانده‌نشده|عالی/);
+  assert.match(formatRoomsList([], { unreadOnly: true }).text, /مهم|خوانده‌نشده|عالی/);
 });
 
 test('confirm keyboard and AI fallback card', () => {

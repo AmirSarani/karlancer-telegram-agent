@@ -107,7 +107,7 @@ export function createRoomFlows(deps) {
   }
 
   async function replyRoomsList(ctx, { unreadOnly = false, edit = false, page = 1 } = {}) {
-    const title = unreadOnly ? '🔔 هشدارها · خوانده‌نشده' : '💬 گفتگوها';
+    const title = unreadOnly ? '🔥 مهم‌ها' : '💬 گفتگوها';
     const res = await listRoomsFromApi({ unreadOnly });
     if (!res.ok) {
       const { text, keyboard } = formatFriendlyError(res.error, {
@@ -137,7 +137,7 @@ export function createRoomFlows(deps) {
     }
     if (!card) {
       const { text, keyboard } = formatFriendlyError(
-        `گفتگوی #${roomId} پیدا نشد. اول هشدارها یا اسکن را بزنید.`,
+        `این گفتگو پیدا نشد. اول مهم‌ها یا اسکن را بزنید.`,
         { title: '⚠️ گفتگو', retryCallback: 'goto:chats' }
       );
       await editOrReply(ctx, text, { reply_markup: keyboard }, { edit });
@@ -199,7 +199,7 @@ export function createRoomFlows(deps) {
     }
 
     if (!queue) {
-      const { text: errText, keyboard } = formatFriendlyError('صف job وصل نیست.', {
+      const { text: errText, keyboard } = formatFriendlyError('صف عملیات وصل نیست.', {
         retryCallback: `room:cfm:${roomId}`,
       });
       await ctx.reply(errText, { ...menuOpts(), reply_markup: keyboard });
@@ -245,9 +245,8 @@ export function createRoomFlows(deps) {
       const msg = [
         formatComplete('send'),
         '————————',
-        `اتاق #${roomId}`,
-        '⛔ ارسال واقعی: blocked_by_missing_api',
-        'Job در needs_reconciliation می‌ماند تا قرارداد API ثبت شود.',
+        '⛔ ارسال واقعی فعلاً فعال نیست (blocked_by_missing_api).',
+        'تأیید ثبت شد؛ ارسال پس از آماده‌شدن مسیر انجام می‌شود.',
         'پیش‌نویس محفوظ است.',
       ].join('\n');
       await editOrReply(
@@ -260,9 +259,8 @@ export function createRoomFlows(deps) {
     }
 
     const msg = [
-      formatComplete('send', 'ارسال در صف worker قرار گرفت.'),
-      `اتاق: #${roomId}`,
-      `job: ${String(job.jobId).slice(0, 8)}…`,
+      formatComplete('send', 'ارسال در صف قرار گرفت.'),
+      `گفتگو ثبت شد.`,
       decided?.job?.status ? `وضعیت: ${decided.job.status}` : null,
     ]
       .filter(Boolean)
@@ -299,7 +297,7 @@ export function createRoomFlows(deps) {
       ctx,
       [
         formatComplete('reject'),
-        `گفتگوی #${roomId} رد شد.`,
+        'این گفتگو رد شد.',
         'پیش‌نویس ارسال نمی‌شود.',
       ].join('\n'),
       { reply_markup: roomCardKeyboard(roomId) },
@@ -311,7 +309,7 @@ export function createRoomFlows(deps) {
     roomState.setAwaitingNote(ctx.from?.id, roomId);
     await ctx.reply(
       [
-        `📝 نوت برای گفتگوی #${roomId}`,
+        '📝 نوت برای این گفتگو',
         '————————',
         '',
         'متن راهنما را در پیام بعدی بفرستید.',

@@ -15,6 +15,8 @@ import {
   formatHelp,
   formatWelcome,
   formatSettingsCard,
+  formatSystemDetails,
+  systemDetailsKeyboard,
   formatScanQueued,
   formatDecideResult,
   formatLoading,
@@ -24,6 +26,7 @@ import {
   mapMenuText,
   formatAgeFa,
   approvalTarget,
+  actionLabelFa,
   deriveSystemHealth,
 } from '../../src/telegram/ui.js';
 
@@ -58,7 +61,9 @@ test('status inline shows approvals link only when pending > 0', () => {
   const data0 = empty.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(data0.includes('refresh:status'));
   assert.ok(data0.includes('nav:home'));
+  assert.ok(data0.includes('dash:details'));
   assert.ok(!data0.includes('goto:approvals'));
+  for (const row of empty.inline_keyboard) assert.ok(row.length <= 2);
 
   const withPending = statusInlineKeyboard({ pendingCount: 3 });
   const data = withPending.inline_keyboard.flat().map((b) => b.callback_data);
@@ -72,9 +77,11 @@ test('afterScan / settings / home keyboards navigate', () => {
   assert.ok(after.includes('scan:refresh') || after.includes('scan:details') || after.includes('scan:chats'));
   assert.ok(after.includes('nav:home'));
 
-  const setRun = settingsInlineKeyboard('running').inline_keyboard.flat().map((b) => b.callback_data);
+  const setRunKb = settingsInlineKeyboard('running');
+  const setRun = setRunKb.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(setRun.includes('set:pause'));
   assert.ok(setRun.includes('set:scan'));
+  for (const row of setRunKb.inline_keyboard) assert.ok(row.length <= 2);
 
   const setPause = settingsInlineKeyboard('paused').inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(setPause.includes('set:resume'));
@@ -93,6 +100,7 @@ test('parseCallbackData covers approve/reject/nav/settings/pagination', () => {
   assert.deepEqual(parseCallbackData('goto:chats'), { type: 'goto_chats' });
   assert.deepEqual(parseCallbackData('nav:home'), { type: 'nav_home' });
   assert.deepEqual(parseCallbackData('nav:set'), { type: 'nav_settings' });
+  assert.deepEqual(parseCallbackData('dash:details'), { type: 'dash_details' });
   assert.deepEqual(parseCallbackData('set:scan'), { type: 'set_scan' });
   assert.deepEqual(parseCallbackData('scan:refresh'), { type: 'scan_refresh' });
   assert.deepEqual(parseCallbackData('scan:details'), { type: 'scan_details' });
@@ -112,6 +120,7 @@ test('mapMenuText maps new IA and legacy labels', () => {
   assert.equal(mapMenuText(BTN.CHATS_LEGACY), 'chats');
   assert.equal(mapMenuText(BTN.ALERTS), 'alerts');
   assert.equal(mapMenuText(BTN.UNREAD), 'alerts');
+  assert.equal(mapMenuText(BTN.ALERTS_LEGACY), 'alerts');
   assert.equal(mapMenuText(BTN.APPROVALS), 'approvals');
   assert.equal(mapMenuText(BTN.SETTINGS), 'settings');
   assert.equal(mapMenuText(BTN.HELP), 'help');
@@ -131,14 +140,32 @@ test('formatStatusCard is System Healthy style and redacts secrets', () => {
     pollOk: true,
     db: 'up',
     worker: 'idle',
+    lastScanUnread: 1,
+    importantChats: 3,
     lastError: 'Bearer abcdefghijklmnop secret',
   });
   assert.match(text, /داشبورد عملیات/);
   assert.match(text, /سیستم سالم|هشدار/);
   assert.match(text, /کارلنسر: ✅ متصل/);
+  assert.match(text, /گفتگوهای مهم/);
+  assert.match(text, /پیام جدید/);
+  assert.match(text, /تأیید باز/);
   assert.doesNotMatch(text, /abcdefghijklmnop/);
   assert.doesNotMatch(text, /Bearer/i);
-  assert.match(text, /آخرین خطا/);
+  assert.doesNotMatch(text, /\bworker\b|دیتابیس|openai|playwright/i);
+  assert.match(text, /توجه|خطا/);
+  const details = formatSystemDetails({
+    queued: 1,
+    running: 0,
+    waitingApproval: 2,
+    pendingApprovals: 2,
+    db: 'up',
+    worker: 'idle',
+    pollOk: true,
+  });
+  assert.match(details, /جزئیات سیستم/);
+  assert.match(details, /صف کار/);
+  assert.ok(systemDetailsKeyboard().inline_keyboard.flat().some((b) => b.callback_data === 'nav:dash'));
   assert.equal(deriveSystemHealth({ karlancerAuth: true, pollOk: true, state: 'running' }), 'healthy');
   assert.equal(deriveSystemHealth({ karlancerAuth: false }), 'down');
 });
@@ -157,8 +184,9 @@ test('formatApprovalsList empty and non-empty', () => {
       payload_json: JSON.stringify({ projectId: 42 }),
     },
   ]);
-  assert.match(list.text, /bids\.submit/);
+  assert.match(list.text, /ثبت پیشنهاد|bids/);
   assert.match(list.text, /42/);
+  assert.equal(actionLabelFa('messages.send'), 'ارسال پیام');
   assert.equal(list.keyboards.length, 1);
 });
 
@@ -173,10 +201,12 @@ test('approvalTarget extracts projectId safely', () => {
 
 test('help / welcome / settings / loading / friendly errors', () => {
   const h = formatHelp();
-  assert.match(h, /منوی اصلی/);
+  assert.match(h, /نقشه|صفحه/);
   assert.match(h, /داشبورد/);
-  assert.match(formatWelcome(), /Operations Dashboard|داشبورد/);
+  assert.doesNotMatch(h, /Mutation/i);
+  assert.match(formatWelcome({ karlancerAuth: true }), /مرکز عملیات|داشبورد|کارلنسر: متصل/);
   assert.match(formatSettingsCard({ state: 'paused' }), /مکث/);
+  assert.match(formatSettingsCard({ state: 'running' }), /عملیات نیازمند تأیید/);
   assert.match(formatScanQueued('abcdefgh-ijkl'), /اسکن|صف/);
   assert.match(formatDecideResult({ approve: true, approvalId: 'abcdefgh', jobStatus: 'queued' }), /تأیید شد/);
   assert.match(formatLoading('ai'), /تحلیل/);
@@ -191,6 +221,8 @@ test('help / welcome / settings / loading / friendly errors', () => {
 test('formatAgeFa and BOT_COMMANDS match IA', () => {
   assert.equal(formatAgeFa(new Date().toISOString()), 'همین الان');
   assert.ok(BOT_COMMANDS.some((c) => c.command === 'status'));
-  assert.ok(BOT_COMMANDS.some((c) => /داشبورد|سلامت/.test(c.description)));
+  assert.ok(BOT_COMMANDS.some((c) => c.command === 'settings'));
+  assert.ok(BOT_COMMANDS.some((c) => c.command === 'help'));
+  assert.ok(BOT_COMMANDS.some((c) => /داشبورد|سلامت|خانه/.test(c.description)));
   assert.ok(BOT_COMMANDS.every((c) => typeof c.description === 'string' && c.description.length > 0));
 });

@@ -26,6 +26,7 @@ import {
   toFaNum,
   formatRelativeTime,
   priorityReasonLabel,
+  priorityBadge,
 } from './scan-ux.js';
 
 export {
@@ -50,36 +51,43 @@ export {
   toFaNum,
   formatRelativeTime,
   priorityReasonLabel,
+  priorityBadge,
 };
 
 /** Reply-keyboard button labels (exact match for hears / text map). Max 6 main items. */
 export const BTN = Object.freeze({
-  DASHBOARD: 'داشبورد',
-  CHATS: 'گفتگوها',
-  ALERTS: 'هشدارها',
-  APPROVALS: 'تأییدها',
-  SETTINGS: 'تنظیمات',
-  HELP: 'راهنما',
+  DASHBOARD: '📊 داشبورد',
+  CHATS: '💬 گفتگوها',
+  ALERTS: '🔥 مهم‌ها',
+  APPROVALS: '✅ تأییدها',
+  SETTINGS: '⚙️ تنظیمات',
+  HELP: '❓ راهنما',
   // Legacy aliases (still mapped for mid-session keyboards)
   STATUS: 'وضعیت',
   UNREAD: 'خوانده‌نشده',
+  ALERTS_LEGACY: 'هشدارها',
   SCAN: 'اسکن',
   PAUSE: 'مکث',
   RESUME: 'ادامه',
   CHATS_LEGACY: 'چت‌ها',
+  DASHBOARD_LEGACY: 'داشبورد',
+  APPROVALS_LEGACY: 'تأییدها',
+  SETTINGS_LEGACY: 'تنظیمات',
+  HELP_LEGACY: 'راهنما',
 });
 
 /** BotCommand list for setMyCommands (Persian) — matches new IA. */
 export const BOT_COMMANDS = [
-  { command: 'start', description: 'داشبورد عملیات AI' },
+  { command: 'start', description: 'خانه — داشبورد عملیات' },
   { command: 'status', description: 'داشبورد سلامت سیستم' },
   { command: 'chats', description: 'گفتگوهای کارلنسر' },
-  { command: 'unread', description: 'هشدارها و خوانده‌نشده' },
+  { command: 'unread', description: 'مهم‌ها و خوانده‌نشده' },
   { command: 'approvals', description: 'تأییدهای در انتظار' },
-  { command: 'scan', description: 'صف‌کردن اسکن دعوت‌ها' },
+  { command: 'settings', description: 'تنظیمات ایجنت' },
+  { command: 'scan', description: 'اسکن گفتگوها' },
   { command: 'pause', description: 'مکث موقت ایجنت' },
   { command: 'resume', description: 'ادامه کار ایجنت' },
-  { command: 'help', description: 'راهنمای داشبورد' },
+  { command: 'help', description: 'راهنمای کوتاه' },
   { command: 'approve', description: 'تأیید پیشرفته (با شناسه)' },
   { command: 'reject', description: 'رد پیشرفته (با شناسه)' },
   { command: 'cancel', description: 'لغو جریان جاری (مثلاً نوت)' },
@@ -110,8 +118,8 @@ export function approvalActionKeyboard(approvalId) {
     .text('✅ تأیید', `ok:${approvalId}`)
     .text('❌ رد', `no:${approvalId}`)
     .row()
-    .text('🏠 خانه', 'nav:home')
-    .text('🔄 تازه‌سازی', 'goto:approvals');
+    .text('⬅️ بازگشت', 'goto:approvals')
+    .text('🏠 خانه', 'nav:home');
 }
 
 /**
@@ -119,7 +127,7 @@ export function approvalActionKeyboard(approvalId) {
  * @param {{ back?: string, refresh?: string, home?: boolean }} [opts]
  */
 export function navRow(kb, { back = 'nav:home', refresh = null, home = true } = {}) {
-  if (back) kb.text('◀️ بازگشت', back);
+  if (back) kb.text('⬅️ بازگشت', back);
   if (home) kb.text('🏠 خانه', 'nav:home');
   if (refresh) kb.text('🔄', refresh);
   return kb;
@@ -130,15 +138,26 @@ export function navRow(kb, { back = 'nav:home', refresh = null, home = true } = 
  */
 export function statusInlineKeyboard({ pendingCount = 0 } = {}) {
   const kb = new InlineKeyboard()
-    .text('🔄 تازه‌سازی', 'refresh:status')
-    .text('🏠 خانه', 'nav:home');
+    .text('🔄 بروزرسانی', 'refresh:status')
+    .text('🏠 خانه', 'nav:home')
+    .row()
+    .text('🛠 جزئیات سیستم', 'dash:details');
   if (pendingCount > 0) {
-    kb.row().text(`📋 تأییدها (${pendingCount})`, 'goto:approvals');
+    kb.row().text(`✅ تأییدها (${toFaNum(pendingCount)})`, 'goto:approvals');
   }
   kb.row()
     .text('💬 گفتگوها', 'goto:chats')
-    .text('🔔 هشدارها', 'goto:unread');
+    .text('🔥 مهم‌ها', 'goto:unread');
   return kb;
+}
+
+/** Keyboard for system details (technical/ops dump). */
+export function systemDetailsKeyboard() {
+  return new InlineKeyboard()
+    .text('⬅️ بازگشت', 'nav:dash')
+    .text('🏠 خانه', 'nav:home')
+    .row()
+    .text('🔄 بروزرسانی', 'dash:details');
 }
 
 export function afterScanInlineKeyboard(summary = {}) {
@@ -151,15 +170,16 @@ export function afterScanInlineKeyboard(summary = {}) {
 export function settingsInlineKeyboard(agentState = 'running') {
   const kb = new InlineKeyboard();
   if (agentState === 'paused') {
-    kb.text('▶️ ادامه', 'set:resume');
+    kb.text('▶️ ادامه ایجنت', 'set:resume');
   } else {
-    kb.text('⏸ مکث', 'set:pause');
+    kb.text('⏸ مکث ایجنت', 'set:pause');
   }
-  kb.text('📡 اسکن الان', 'set:scan')
+  kb.text('📡 اجرای اسکن', 'set:scan')
     .row()
-    .text('◀️ بازگشت', 'nav:dash')
+    .text('⬅️ بازگشت', 'nav:dash')
     .text('🏠 خانه', 'nav:home')
-    .text('🔄', 'nav:set');
+    .row()
+    .text('🔄 بروزرسانی', 'nav:set');
   return kb;
 }
 
@@ -168,11 +188,11 @@ export function homeInlineKeyboard() {
     .text('📊 داشبورد', 'nav:dash')
     .text('💬 گفتگوها', 'goto:chats')
     .row()
-    .text('🔔 هشدارها', 'goto:unread')
-    .text('📋 تأییدها', 'goto:approvals')
+    .text('🔥 مهم‌ها', 'goto:unread')
+    .text('✅ تأییدها', 'goto:approvals')
     .row()
     .text('⚙️ تنظیمات', 'nav:set')
-    .text('📖 راهنما', 'nav:help');
+    .text('❓ راهنما', 'nav:help');
 }
 
 /**
@@ -191,6 +211,7 @@ export function parseCallbackData(data) {
   if (data === 'nav:dash') return { type: 'nav_dash' };
   if (data === 'nav:set') return { type: 'nav_settings' };
   if (data === 'nav:help') return { type: 'nav_help' };
+  if (data === 'dash:details') return { type: 'dash_details' };
   if (data === 'set:pause') return { type: 'set_pause' };
   if (data === 'set:resume') return { type: 'set_resume' };
   if (data === 'set:scan') return { type: 'set_scan' };
@@ -215,16 +236,7 @@ export function parseCallbackData(data) {
 
 /** @param {string|Date|null|undefined} iso */
 export function formatAgeFa(iso) {
-  if (!iso) return '—';
-  const t = typeof iso === 'string' ? Date.parse(iso) : +iso;
-  if (!Number.isFinite(t)) return '—';
-  const mins = Math.max(0, Math.floor((Date.now() - t) / 60_000));
-  if (mins < 1) return 'همین الان';
-  if (mins < 60) return `${mins} دقیقه پیش`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} ساعت پیش`;
-  const days = Math.floor(hours / 24);
-  return `${days} روز پیش`;
+  return formatRelativeTime(iso);
 }
 
 /**
@@ -247,10 +259,31 @@ export function approvalTarget(approval) {
     payload.slug ||
     null;
   const action = approval.action || payload.goal || '—';
+  const preview =
+    payload.text ||
+    payload.message ||
+    payload.body ||
+    payload.content ||
+    payload.draft ||
+    null;
   return {
     action: String(action),
     target: target != null ? String(target) : '—',
+    preview: preview != null ? String(preview) : '',
   };
+}
+
+/** User-facing action label (avoid developer jargon). */
+export function actionLabelFa(action) {
+  const a = String(action || '');
+  const map = {
+    'messages.send': 'ارسال پیام',
+    'bids.submit': 'ثبت پیشنهاد',
+    'rooms.scan': 'اسکن گفتگوها',
+  };
+  if (map[a]) return map[a];
+  if (!a || a === '—') return 'عملیات';
+  return a.replace(/[._]/g, ' ').slice(0, 40);
 }
 
 /**
@@ -275,7 +308,7 @@ function healthHeader(level) {
 }
 
 /**
- * SaaS-style System Healthy dashboard card.
+ * Ops health dashboard — answers in &lt;5s. No technical dump on main.
  */
 export function formatStatusCard(s = {}) {
   const health = deriveSystemHealth(s);
@@ -287,39 +320,79 @@ export function formatStatusCard(s = {}) {
         ? '❌ قطع'
         : '❔ نامشخص';
 
+  const important =
+    s.importantChats != null
+      ? Number(s.importantChats)
+      : s.pendingRooms != null
+        ? Number(s.pendingRooms)
+        : null;
+  const newMsgs =
+    s.newMessages != null
+      ? Number(s.newMessages)
+      : s.lastScanUnread != null
+        ? Number(s.lastScanUnread)
+        : null;
+  const pending = Number(s.pendingApprovals ?? 0) || 0;
+
+  const lastActivity =
+    s.lastActivityAt ||
+    s.lastPollAt ||
+    s.lastScanAt ||
+    s.lastCommandAt ||
+    null;
+
   const lines = [
     '📊 داشبورد عملیات',
     healthHeader(health),
     '————————',
     '',
-    '🖥 سیستم',
+    '🖥 وضعیت',
     `• ایجنت: ${stateFa}`,
     `• کارلنسر: ${karlancerLine}`,
   ];
 
-  if (s.pollOk === true) lines.push('• poll پیام: سالم');
-  else if (s.pollOk === false) lines.push('• poll پیام: خطا');
-  if (s.db) lines.push(`• دیتابیس: ${s.db}`);
-  if (s.worker) lines.push(`• worker: ${s.worker}`);
-
-  lines.push(
-    '',
-    '📦 صف کار',
-    `• در انتظار: ${s.queued ?? 0}`,
-    `• در حال اجرا: ${s.running ?? 0}`,
-    `• منتظر تأیید: ${s.waitingApproval ?? 0}`,
-    `• تأییدهای باز: ${s.pendingApprovals ?? 0}`
-  );
+  if (important != null) lines.push(`• گفتگوهای مهم: ${toFaNum(important)}`);
+  if (newMsgs != null) lines.push(`• پیام جدید: ${toFaNum(newMsgs)}`);
+  lines.push(`• تأیید باز: ${toFaNum(pending)}`);
 
   lines.push('', '📡 فعالیت');
   if (s.lastScanAt) lines.push(`• آخرین اسکن: ${formatAgeFa(s.lastScanAt)}`);
   else lines.push('• آخرین اسکن: —');
-  if (s.lastScanUnread != null) lines.push(`• خوانده‌نشده اسکن: ${s.lastScanUnread}`);
-  if (s.lastPollAt) lines.push(`• آخرین poll: ${formatAgeFa(s.lastPollAt)}`);
-  if (s.pendingRooms != null) lines.push(`• تصمیم چت باز: ${s.pendingRooms}`);
-  if (s.startedAt) lines.push(`• آپ‌تایم از: ${formatAgeFa(s.startedAt)}`);
-  if (s.lastCommandAt) lines.push(`• آخرین دستور: ${formatAgeFa(s.lastCommandAt)}`);
+  if (lastActivity) lines.push(`• آخرین فعالیت: ${formatAgeFa(lastActivity)}`);
 
+  if (s.lastError) {
+    lines.push('', `⚠️ توجه: ${friendlyErrorText(s.lastError)}`);
+  }
+
+  lines.push('', 'جزئیات فنی در «جزئیات سیستم».');
+  return lines.join('\n');
+}
+
+/**
+ * Technical / ops dump — moved off the main dashboard.
+ */
+export function formatSystemDetails(s = {}) {
+  const lines = [
+    '🛠 جزئیات سیستم',
+    '————————',
+    '',
+    '📦 صف کار',
+    `• در انتظار: ${toFaNum(s.queued ?? 0)}`,
+    `• در حال اجرا: ${toFaNum(s.running ?? 0)}`,
+    `• منتظر تأیید: ${toFaNum(s.waitingApproval ?? 0)}`,
+    `• تأییدهای باز: ${toFaNum(s.pendingApprovals ?? 0)}`,
+    '',
+    '🔌 اتصال',
+  ];
+  if (s.pollOk === true) lines.push('• دریافت پیام: سالم');
+  else if (s.pollOk === false) lines.push('• دریافت پیام: خطا');
+  else lines.push('• دریافت پیام: —');
+  if (s.db) lines.push(`• پایگاه داده: ${s.db}`);
+  if (s.worker) lines.push(`• پردازشگر: ${s.worker}`);
+  if (s.lastPollAt) lines.push(`• آخرین دریافت: ${formatAgeFa(s.lastPollAt)}`);
+  if (s.pendingRooms != null) lines.push(`• تصمیم باز: ${toFaNum(s.pendingRooms)}`);
+  if (s.startedAt) lines.push(`• شروع کار: ${formatAgeFa(s.startedAt)}`);
+  if (s.lastCommandAt) lines.push(`• آخرین دستور: ${formatAgeFa(s.lastCommandAt)}`);
   if (s.lastError) {
     lines.push('', `⚠️ آخرین خطا: ${friendlyErrorText(s.lastError)}`);
   }
@@ -327,20 +400,23 @@ export function formatStatusCard(s = {}) {
     const cleaned = redactString(String(s.extra)).trim().slice(0, 200);
     if (cleaned) lines.push('', cleaned);
   }
+  lines.push('', 'این صفحه برای عیب‌یابی است؛ داشبورد اصلی خلاصهٔ عملیاتی است.');
   return lines.join('\n');
 }
 
 export function formatSettingsCard(s = {}) {
   const stateFa = s.state === 'paused' ? '⏸ مکث' : '▶️ فعال';
+  const approvalMode = s.mutationNeedsApproval === false ? 'خاموش' : 'روشن';
   return [
     '⚙️ تنظیمات',
     '————————',
     '',
-    `• حالت ایجنت: ${stateFa}`,
-    '• اسکن: صف‌کردن بررسی دعوت‌ها',
+    `• ایجنت: ${stateFa}`,
+    '• اسکن: بررسی گفتگوها و موارد مهم',
+    `• عملیات نیازمند تأیید: ${approvalMode}`,
     '',
-    'از دکمه‌های زیر مکث/ادامه یا اسکن را انتخاب کنید.',
-    'ارسال واقعی پیام همچنان نیازمند تأیید شماست.',
+    'از دکمه‌های زیر مکث، ادامه یا اجرای اسکن را بزنید.',
+    'هر ارسال واقعی فقط بعد از تأیید شما انجام می‌شود.',
   ].join('\n');
 }
 
@@ -352,13 +428,13 @@ export function formatApprovalsList(pending, { max = 8 } = {}) {
   if (!pending?.length) {
     return {
       text: [
-        '📋 تأییدها',
+        '✅ تأییدها',
         '————————',
         '',
-        '✅ صف تأیید خالی است.',
+        'صف تأیید خالی است.',
         '',
         'وقتی عملیاتی نیاز به تأیید شما داشته باشد، اینجا می‌آید.',
-        'تا آن موقع می‌توانید گفتگوها یا هشدارها را ببینید.',
+        'تا آن موقع می‌توانید گفتگوها یا مهم‌ها را ببینید.',
       ].join('\n'),
       keyboards: [],
     };
@@ -368,30 +444,51 @@ export function formatApprovalsList(pending, { max = 8 } = {}) {
   const keyboards = [];
   for (let i = 0; i < slice.length; i++) {
     const a = slice[i];
-    const { action, target } = approvalTarget(a);
+    const { action, target, preview } = approvalTarget(a);
     const shortId = String(a.approval_id || '').slice(0, 8);
+    const previewLine = preview
+      ? `• متن: «${truncatePersianText(preview, { max: 100, lines: 2 })}»`
+      : null;
     blocks.push(
       [
-        `🧾 مورد ${i + 1}/${pending.length}`,
-        `• عمل: ${action}`,
-        `• هدف: ${target}`,
-        `• سن: ${formatAgeFa(a.created_at)}`,
+        `🧾 مورد ${toFaNum(i + 1)} از ${toFaNum(pending.length)}`,
+        `• عملیات: ${actionLabelFa(action)}`,
+        `• مقصد: ${target}`,
+        previewLine,
+        `• زمان: ${formatAgeFa(a.created_at)}`,
         `• شناسه: ${shortId}…`,
-      ].join('\n')
+      ]
+        .filter(Boolean)
+        .join('\n')
     );
     keyboards.push(approvalActionKeyboard(a.approval_id));
   }
-  let text = ['📋 تأییدهای در انتظار', '————————', '', ...blocks].join('\n\n');
+  let out = ['✅ تأییدهای در انتظار', '————————', '', ...blocks].join('\n\n');
   if (pending.length > max) {
-    text += `\n\n… و ${pending.length - max} مورد دیگر`;
+    out += `\n\n… و ${toFaNum(pending.length - max)} مورد دیگر`;
   }
-  return { text, keyboards };
+  return { text: out, keyboards };
 }
 
 /**
  * @param {{ karlancerAuth?: boolean|null, lastScanAt?: string|null, pendingApprovals?: number }} [opts]
  */
 export function formatWelcome(opts = {}) {
+  const health = deriveSystemHealth({
+    karlancerAuth: opts.karlancerAuth,
+    state: opts.state,
+    pollOk: opts.pollOk,
+    pendingApprovals: opts.pendingApprovals,
+    lastError: opts.lastError,
+  });
+  const systemLine =
+    health === 'healthy' ? 'سیستم: 🟢 سالم' : health === 'down' ? 'سیستم: 🔴 نیاز به توجه' : 'سیستم: 🟡 هشدار';
+  const authLine =
+    opts.karlancerAuth === true
+      ? 'احراز هویت: ✅ آماده'
+      : opts.karlancerAuth === false
+        ? 'احراز هویت: ❌ نیاز به بررسی'
+        : 'احراز هویت: ❔ نامشخص';
   const karlancerLine =
     opts.karlancerAuth === true
       ? 'کارلنسر: متصل ✅'
@@ -399,49 +496,47 @@ export function formatWelcome(opts = {}) {
         ? 'کارلنسر: قطع ❌'
         : 'کارلنسر: نامشخص';
   const lines = [
-    'سلام 👋',
-    'AI Operations Dashboard',
+    '🏠 کارلنسر — مرکز عملیات AI',
     '————————',
     '',
-    'داشبورد عملیات کارلنسر آماده است.',
+    'سلام 👋 به داشبورد حرفه‌ای خوش آمدید.',
+    '',
+    `• ${systemLine}`,
+    `• ${authLine}`,
     `• ${karlancerLine}`,
   ];
   if (opts.lastScanAt) lines.push(`• آخرین اسکن: ${formatAgeFa(opts.lastScanAt)}`);
-  if (opts.pendingApprovals > 0) {
-    lines.push(`• تأیید باز: ${opts.pendingApprovals}`);
+  if ((opts.pendingApprovals || 0) > 0) {
+    lines.push(`• تأیید باز: ${toFaNum(opts.pendingApprovals)}`);
   }
   lines.push(
     '',
-    'منوی پایین:',
-    'داشبورد · گفتگوها · هشدارها',
-    'تأییدها · تنظیمات · راهنما'
+    'از دکمه‌های زیر شروع کنید، یا منوی پایین را بزنید.'
   );
   return lines.join('\n');
 }
 
 export function formatHelp() {
   return [
-    '📖 راهنما',
+    '❓ راهنما',
     '————————',
     '',
-    '🔹 منوی اصلی',
-    `• ${BTN.DASHBOARD} — سلامت سیستم و صف`,
+    'نقشهٔ سریع صفحه‌ها:',
+    '',
+    `• 🏠 خانه — وضعیت کلی و میان‌برها`,
+    `• ${BTN.DASHBOARD} — سالم؟ چه چیزی مهم است؟`,
     `• ${BTN.CHATS} — لیست گفتگوها`,
-    `• ${BTN.ALERTS} — خوانده‌نشده‌ها و هشدار`,
-    `• ${BTN.APPROVALS} — تأیید با ✅/❌`,
-    `• ${BTN.SETTINGS} — مکث، ادامه، اسکن`,
-    `• ${BTN.HELP} — همین متن`,
+    `• ${BTN.ALERTS} — موارد نیازمند توجه`,
+    `• ${BTN.APPROVALS} — تأیید یا رد عملیات`,
+    `• ${BTN.SETTINGS} — مکث / ادامه / اسکن`,
     '',
-    '🔹 داخل گفتگو',
-    'مشاهده · خلاصه AI · نوت · تأیید · بازگشت',
-    'قبل از ارسال، پیش‌نمایش + تأیید نهایی می‌آید.',
+    'داخل هر گفتگو: مشاهده · تحلیل AI · نوت',
+    'قبل از ارسال، پیش‌نمایش و تأیید نهایی می‌آید.',
     '',
-    '🔹 دستورات اختیاری',
-    '/status · /chats · /unread · /approvals',
-    '/scan · /pause · /resume · /cancel',
+    'دستورات: /start · /status · /chats · /unread',
+    '/approvals · /settings · /scan · /help',
     '',
-    'Mutationها فقط بعد از تأیید شما اجرا می‌شوند.',
-    'رمز یا توکن هرگز در پیام نشان داده نمی‌شود.',
+    'عملیات حساس فقط بعد از تأیید شما اجرا می‌شود.',
   ].join('\n');
 }
 
@@ -454,10 +549,10 @@ export function formatDecideResult({ approve, approvalId, jobStatus, note }) {
   const short = String(approvalId || '').slice(0, 8);
   const lines = [
     approve ? '✅ انجام شد' : '❌ رد شد',
-    `${verb}`,
+    verb,
     `شناسه: ${short}…`,
   ];
-  if (jobStatus) lines.push(`وضعیت job: ${jobStatus}`);
+  if (jobStatus) lines.push(`وضعیت وظیفه: ${jobStatus}`);
   if (note) lines.push(String(note));
   return lines.join('\n');
 }
@@ -468,7 +563,7 @@ export function formatLoading(kind = 'default') {
     default: '⏳ لطفاً صبر کنید…',
     status: '⏳ در حال بارگذاری داشبورد…',
     chats: '⏳ در حال دریافت گفتگوها…',
-    unread: '⏳ در حال دریافت هشدارها…',
+    unread: '⏳ در حال دریافت مهم‌ها…',
     room: '⏳ در حال باز کردن گفتگو…',
     ai: '🤖 در حال تحلیل AI…',
     note: '⏳ در حال اعمال نوت…',
@@ -560,12 +655,12 @@ export function formatFriendlyError(err, { title = '⚠️ خطا', retryCallbac
  */
 export function mapMenuText(text) {
   const t = (text || '').trim();
-  if (t === BTN.DASHBOARD || t === BTN.STATUS) return 'dashboard';
+  if (t === BTN.DASHBOARD || t === BTN.STATUS || t === BTN.DASHBOARD_LEGACY) return 'dashboard';
   if (t === BTN.CHATS || t === BTN.CHATS_LEGACY) return 'chats';
-  if (t === BTN.ALERTS || t === BTN.UNREAD) return 'alerts';
-  if (t === BTN.APPROVALS) return 'approvals';
-  if (t === BTN.SETTINGS) return 'settings';
-  if (t === BTN.HELP) return 'help';
+  if (t === BTN.ALERTS || t === BTN.UNREAD || t === BTN.ALERTS_LEGACY) return 'alerts';
+  if (t === BTN.APPROVALS || t === BTN.APPROVALS_LEGACY) return 'approvals';
+  if (t === BTN.SETTINGS || t === BTN.SETTINGS_LEGACY) return 'settings';
+  if (t === BTN.HELP || t === BTN.HELP_LEGACY) return 'help';
   if (t === BTN.SCAN) return 'scan';
   if (t === BTN.PAUSE) return 'pause';
   if (t === BTN.RESUME) return 'resume';

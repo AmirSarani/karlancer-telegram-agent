@@ -13,7 +13,12 @@ import {
   formatWelcome,
   formatHelp,
   formatSettingsCard,
+  formatSystemDetails,
+  systemDetailsKeyboard,
   formatScanQueued,
+  actionLabelFa,
+  truncatePreview,
+  toFaNum,
   findActiveScanJob,
   formatScanAlreadyRunning,
   formatScanDetails,
@@ -289,6 +294,20 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       if (card.pendingRooms == null) card.pendingRooms = roomFlows.roomState.pendingCount();
     }
 
+    const lastScan = readLastScanSummary();
+    if (lastScan) {
+      if (card.lastScanAt == null && lastScan.scannedAt) card.lastScanAt = lastScan.scannedAt;
+      if (card.lastScanUnread == null && lastScan.unreadOnPage != null) {
+        card.lastScanUnread = lastScan.unreadOnPage;
+      }
+      if (card.importantChats == null && Array.isArray(lastScan.priorityRooms)) {
+        card.importantChats = lastScan.priorityRooms.length;
+      }
+      if (card.newMessages == null && lastScan.unreadOnPage != null) {
+        card.newMessages = lastScan.unreadOnPage;
+      }
+    }
+
     return card;
   }
 
@@ -298,8 +317,21 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       karlancerAuth: card.karlancerAuth,
       lastScanAt: card.lastScanAt,
       pendingApprovals: card.pendingApprovals,
+      state: card.state,
+      pollOk: card.pollOk,
+      lastError: card.lastError,
     });
     await editOrReply(ctx, text, { reply_markup: homeInlineKeyboard() }, { edit });
+  }
+
+  async function replySystemDetails(ctx, { edit = false } = {}) {
+    const card = await collectStatus();
+    await editOrReply(
+      ctx,
+      formatSystemDetails(card),
+      { reply_markup: systemDetailsKeyboard() },
+      { edit }
+    );
   }
 
   async function replyStatus(ctx, { edit = false } = {}) {
@@ -328,7 +360,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
 
   async function replyApprovals(ctx, { edit = false } = {}) {
     if (!queue) {
-      const { text, keyboard } = formatFriendlyError('صف job وصل نیست.', {
+      const { text, keyboard } = formatFriendlyError('صف عملیات وصل نیست.', {
         retryCallback: 'goto:approvals',
       });
       await editOrReply(ctx, text, { reply_markup: keyboard }, { edit });
@@ -347,17 +379,18 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     }
     const firstKb = keyboards[0];
     const a = pending[0];
-    const { action, target } = approvalTarget(a);
+    const { action, target, preview } = approvalTarget(a);
     const summary = [
-      `📋 تأییدهای در انتظار (${pending.length})`,
+      `✅ تأییدهای در انتظار (${toFaNum(pending.length)})`,
       '————————',
       '',
-      `🧾 مورد اول`,
-      `• عمل: ${action}`,
-      `• هدف: ${target}`,
-      `• سن: ${formatAgeFa(a.created_at)}`,
+      '🧾 مورد اول',
+      `• عملیات: ${actionLabelFa(action)}`,
+      `• مقصد: ${target}`,
+      preview ? `• متن: «${truncatePreview(preview, 100)}»` : null,
+      `• زمان: ${formatAgeFa(a.created_at)}`,
       `• شناسه: ${String(a.approval_id).slice(0, 8)}…`,
-      pending.length > 1 ? `\nبقیه موارد در پیام‌های بعدی.` : '',
+      pending.length > 1 ? '\nبقیه موارد در پیام‌های بعدی.' : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -367,12 +400,15 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       const t = approvalTarget(item);
       await ctx.reply(
         [
-          `🧾 مورد ${i + 1}`,
-          `• عمل: ${t.action}`,
-          `• هدف: ${t.target}`,
-          `• سن: ${formatAgeFa(item.created_at)}`,
+          `🧾 مورد ${toFaNum(i + 1)}`,
+          `• عملیات: ${actionLabelFa(t.action)}`,
+          `• مقصد: ${t.target}`,
+          t.preview ? `• متن: «${truncatePreview(t.preview, 100)}»` : null,
+          `• زمان: ${formatAgeFa(item.created_at)}`,
           `• شناسه: ${String(item.approval_id).slice(0, 8)}…`,
-        ].join('\n'),
+        ]
+          .filter(Boolean)
+          .join('\n'),
         { reply_markup: approvalActionKeyboard(item.approval_id) }
       );
     }
@@ -398,7 +434,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
 
   async function doScan(ctx, { edit = false, page = 1 } = {}) {
     if (!queue) {
-      const { text, keyboard } = formatFriendlyError('صف job وصل نیست.', {
+      const { text, keyboard } = formatFriendlyError('صف عملیات وصل نیست.', {
         retryCallback: 'set:scan',
       });
       await editOrReply(ctx, text, { reply_markup: keyboard }, { edit });
@@ -445,7 +481,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
 
   async function decide(ctx, approve, approvalIdHint) {
     if (!queue) {
-      return { ok: false, text: 'صف job وصل نیست.' };
+      return { ok: false, text: 'صف عملیات وصل نیست.' };
     }
     const arg =
       approvalIdHint ||
@@ -499,6 +535,12 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     await replyHelp(ctx);
+  });
+
+  bot.command('settings', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await replySettings(ctx);
   });
 
   bot.command('status', async (ctx) => {
@@ -559,7 +601,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     if (!roomFlows) {
-      await ctx.reply('هشدارها در دسترس نیست (db).', menuOpts());
+      await ctx.reply('مهم‌ها در دسترس نیست (db).', menuOpts());
       return;
     }
     await roomFlows.replyRoomsList(ctx, { unreadOnly: true });
@@ -587,7 +629,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       return roomFlows.replyRoomsList(ctx, { unreadOnly: false });
     }
     if (action === 'alerts' || action === 'unread') {
-      if (!roomFlows) return ctx.reply('هشدارها در دسترس نیست.', menuOpts());
+      if (!roomFlows) return ctx.reply('مهم‌ها در دسترس نیست.', menuOpts());
       return roomFlows.replyRoomsList(ctx, { unreadOnly: true });
     }
     if (action === 'settings') return replySettings(ctx);
@@ -610,6 +652,12 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     if (parsed.type === 'refresh_status' || parsed.type === 'nav_dash') {
       await ctx.answerCallbackQuery({ text: 'داشبورد…' });
       await replyStatus(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'dash_details') {
+      await ctx.answerCallbackQuery({ text: 'جزئیات…' });
+      await replySystemDetails(ctx, { edit: true });
       return;
     }
 
@@ -669,7 +717,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     if (parsed.type === 'goto_unread' || parsed.type === 'page_unread') {
       await ctx.answerCallbackQuery();
       if (!roomFlows) {
-        await ctx.reply('هشدارها در دسترس نیست.', menuOpts());
+        await ctx.reply('مهم‌ها در دسترس نیست.', menuOpts());
         return;
       }
       const page = parsed.type === 'page_unread' ? parsed.page : 1;
@@ -733,10 +781,22 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       if (roomFlows?.roomState?.setDecision) {
         roomFlows.roomState.setDecision(parsed.roomId, {
           status: 'reviewed',
-          detail: 'scan_done',
+          detail: 'local_reviewed',
         });
       }
-      await renderScanView(ctx, 'summary', { edit: true });
+      const summary = readLastScanSummary();
+      const inScan = Boolean(
+        summary?.priorityRooms?.some(
+          (r) => String(r.roomId ?? r.id) === String(parsed.roomId)
+        )
+      );
+      if (inScan) {
+        await renderScanView(ctx, 'summary', { edit: true });
+      } else if (roomFlows) {
+        await roomFlows.replyRoomCard(ctx, parsed.roomId, { edit: true });
+      } else {
+        await renderScanView(ctx, 'summary', { edit: true });
+      }
       return;
     }
 

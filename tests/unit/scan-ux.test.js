@@ -6,6 +6,7 @@ import {
   truncatePersianText,
   formatRelativeTime,
   priorityReasonLabel,
+  priorityBadge,
   deriveScanState,
   formatScanSummary,
   formatScanDetails,
@@ -104,8 +105,12 @@ test('E: empty success is calm Persian copy', () => {
 });
 
 test('F: loading and already_running states', () => {
-  assert.match(formatScanLoading({ jobId: 'abcdefgh-1' }), /اسکن|صبر|بررسی/);
-  assert.match(formatScanAlreadyRunning({ jobId: 'abcdefgh-1' }), /در حال|موازی|صبر/);
+  const loading = formatScanLoading({ jobId: 'abcdefgh-1' });
+  assert.match(loading, /اسکن|صبر|بررسی/);
+  assert.doesNotMatch(loading, /job:/i);
+  const running = formatScanAlreadyRunning({ jobId: 'abcdefgh-1' });
+  assert.match(running, /در حال|موازی|صبر/);
+  assert.doesNotMatch(running, /job:/i);
   assert.match(formatScanQueued('abcdefgh-1'), /اسکن|بررسی/);
   assert.equal(deriveScanState({ loading: true }), SCAN_STATES.loading);
   assert.equal(deriveScanState({ alreadyRunning: true }), SCAN_STATES.already_running);
@@ -132,6 +137,10 @@ test('I: priority reason uses real reason or conservative label', () => {
   assert.equal(priorityReasonLabel({ reason: 'تطابق کلیدواژه' }), 'تطابق کلیدواژه');
   assert.equal(priorityReasonLabel({ unread: 1 }), 'پیام جدید');
   assert.match(priorityReasonLabel({}), /بررسی|انتخاب/);
+  assert.match(priorityBadge({ unread: 1 }).line, /🔥/);
+  assert.match(priorityBadge({ matched: true }).line, /🟡|🔥/);
+  assert.match(priorityBadge({}).line, /🔵/);
+  assert.notEqual(priorityBadge({}).emoji, '⚪');
 });
 
 test('J: keyboards max 2 buttons/row and scan callbacks parse', () => {
@@ -155,7 +164,8 @@ test('K: afterScanInlineKeyboard aliases buildScanKeyboard', () => {
 });
 
 test('L: priority/unread/room progressive disclosure', () => {
-  assert.match(formatScanPriorityList(samplePriority), /اولویت/);
+  assert.match(formatScanPriorityList(samplePriority), /اولویت|مهم/);
+  assert.doesNotMatch(formatScanPriorityList(samplePriority), /⚪/);
   assert.match(formatScanUnreadList(samplePriority), /خوانده/);
   const card = formatScanRoomCard(samplePriority.priorityRooms[0], { showDetails: false });
   assert.doesNotMatch(card, /7241431/);
