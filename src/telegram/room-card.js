@@ -41,9 +41,11 @@ export const ROOMS_PAGE_SIZE = 5;
 export function roomCardKeyboard(roomId) {
   const id = String(roomId);
   return addPairs(new InlineKeyboard(), [
-    ['👀 پیام‌ها', `room:msg:${id}`],
-    ['🤖 تحلیل AI', `room:ai:${id}`],
-    ['📝 پیش‌نویس پاسخ', `room:dft:${id}`],
+    ['👁 مشاهده', `room:msg:${id}`],
+    ['🤖 تحلیل', `room:ai:${id}`],
+    ['📝 پیش‌نویس', `room:dft:${id}`],
+    ['📤 ارسال', `room:snd:${id}`],
+    ['📜 قانون خودکار', `room:rule:${id}`],
     ['🔄 بروزرسانی', `room:ref:${id}`],
     ['⚙️ جزئیات فنی', `room:tch:${id}`],
     ['✅ بررسی شد', `room:done:${id}`],
@@ -160,7 +162,7 @@ export function roomsListKeyboard(pageRooms, { page = 1, totalPages = 1, unreadO
 export function parseRoomCallback(data) {
   if (typeof data !== 'string' || !data) return null;
   const m =
-    /^room:(open|ok|no|note|ref|ai|cfm|ccl|done|msg|dft|tch|rgn):([0-9A-Za-z_-]{1,24})$/.exec(
+    /^room:(open|ok|no|note|ref|ai|cfm|ccl|done|msg|dft|tch|rgn|snd|rule):([0-9A-Za-z_-]{1,24})$/.exec(
       data
     );
   if (!m) return null;
@@ -178,6 +180,8 @@ export function parseRoomCallback(data) {
     dft: 'room_draft',
     tch: 'room_tech',
     rgn: 'room_regen',
+    snd: 'room_send',
+    rule: 'room_auto_rule',
   };
   return { type: map[m[1]], roomId: m[2] };
 }

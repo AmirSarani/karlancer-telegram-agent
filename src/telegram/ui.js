@@ -84,6 +84,10 @@ export const BOT_COMMANDS = [
   { command: 'unread', description: 'مهم‌ها و خوانده‌نشده' },
   { command: 'approvals', description: 'تأییدهای در انتظار' },
   { command: 'settings', description: 'تنظیمات ایجنت' },
+  { command: 'mode', description: 'نمایش/تغییر حالت اجرا' },
+  { command: 'automation', description: 'خودکارسازی و محدودیت‌ها' },
+  { command: 'show_rules', description: 'قوانین خودکار' },
+  { command: 'emergency_stop', description: 'توقف اضطراری خودکار' },
   { command: 'scan', description: 'اسکن گفتگوها' },
   { command: 'pause', description: 'مکث موقت ایجنت' },
   { command: 'resume', description: 'ادامه کار ایجنت' },
@@ -112,14 +116,20 @@ export function mainMenuKeyboard(agentState = 'running') {
     .persistent();
 }
 
-/** @param {string} approvalId */
-export function approvalActionKeyboard(approvalId) {
-  return new InlineKeyboard()
-    .text('✅ تأیید', `ok:${approvalId}`)
-    .text('❌ رد', `no:${approvalId}`)
-    .row()
-    .text('⬅️ بازگشت', 'goto:approvals')
-    .text('🏠 خانه', 'nav:home');
+/**
+ * Approval screen: Execute · Edit · Reject (HITL hash integrity unchanged — ok/no callbacks).
+ * @param {string} approvalId
+ * @param {{ editable?: boolean }} [opts]
+ */
+export function approvalActionKeyboard(approvalId, { editable = true } = {}) {
+  const kb = new InlineKeyboard()
+    .text('✅ اجرا', `ok:${approvalId}`)
+    .text('❌ رد', `no:${approvalId}`);
+  if (editable) {
+    kb.row().text('✏️ ویرایش', `edit:${approvalId}`);
+  }
+  kb.row().text('⬅️ بازگشت', 'goto:approvals').text('🏠 خانه', 'nav:home');
+  return kb;
 }
 
 /**
@@ -167,8 +177,25 @@ export function afterScanInlineKeyboard(summary = {}) {
 /**
  * @param {'running'|'paused'} agentState
  */
-export function settingsInlineKeyboard(agentState = 'running') {
+/**
+ * Settings hub — mode / rules / emergency (Persian, non-technical).
+ * @param {'running'|'paused'} agentState
+ * @param {{ mode?: string, emergencyStop?: boolean }} [exec]
+ */
+export function settingsInlineKeyboard(agentState = 'running', exec = {}) {
   const kb = new InlineKeyboard();
+  kb.text('🟢 دستی', 'mode:manual')
+    .text('🟡 کمکی', 'mode:assisted')
+    .row()
+    .text('🔴 خودکار', 'mode:auto')
+    .text('📜 قوانین خودکار', 'nav:rules')
+    .row();
+  if (exec.emergencyStop) {
+    kb.text('▶️ رفع توقف اضطراری', 'set:emerg_clear');
+  } else {
+    kb.text('🛑 توقف اضطراری', 'set:emerg');
+  }
+  kb.row();
   if (agentState === 'paused') {
     kb.text('▶️ ادامه ایجنت', 'set:resume');
   } else {
@@ -177,12 +204,50 @@ export function settingsInlineKeyboard(agentState = 'running') {
   kb.text('📡 اجرای اسکن', 'set:scan')
     .row()
     .text('🔐 تمدید نشست', 'set:relogin')
+    .text('🎚 سوئیچ‌ها', 'nav:toggles')
     .row()
     .text('⬅️ بازگشت', 'nav:dash')
     .text('🏠 خانه', 'nav:home')
     .row()
     .text('🔄 بروزرسانی', 'nav:set');
   return kb;
+}
+
+export function modeInlineKeyboard(current = 'manual') {
+  const mark = (m) => (current === m ? '✓ ' : '');
+  return new InlineKeyboard()
+    .text(`${mark('manual')}🟢 دستی`, 'mode:manual')
+    .text(`${mark('assisted')}🟡 کمکی`, 'mode:assisted')
+    .row()
+    .text(`${mark('auto')}🔴 خودکار`, 'mode:auto')
+    .row()
+    .text('⬅️ تنظیمات', 'nav:set')
+    .text('🏠 خانه', 'nav:home');
+}
+
+export function togglesInlineKeyboard(toggles = {}) {
+  const on = (v) => (v ? '🟢 روشن' : '🔒 قفل');
+  return new InlineKeyboard()
+    .text(`پاسخ خودکار: ${on(toggles.autoReplyMessages)}`, 'tog:reply')
+    .row()
+    .text(`پیشنهاد خودکار: ${on(toggles.autoSubmitBids)}`, 'tog:bid')
+    .row()
+    .text(`خواندن اعلان: ${on(toggles.autoMarkNotificationsRead)}`, 'tog:read')
+    .row()
+    .text('⬅️ تنظیمات', 'nav:set')
+    .text('🏠 خانه', 'nav:home');
+}
+
+export function rulesInlineKeyboard() {
+  return new InlineKeyboard()
+    .text('📨 قانون پیام', 'rule:msg')
+    .text('💼 قانون پیشنهاد', 'rule:bid')
+    .row()
+    .text('🔌 روشن/خاموش پیام', 'rule:msg:tog')
+    .text('🔌 روشن/خاموش پیشنهاد', 'rule:bid:tog')
+    .row()
+    .text('⬅️ تنظیمات', 'nav:set')
+    .text('🏠 خانه', 'nav:home');
 }
 
 export function homeInlineKeyboard() {
@@ -219,6 +284,23 @@ export function parseCallbackData(data) {
   if (data === 'set:scan') return { type: 'set_scan' };
   if (data === 'set:relogin') return { type: 'set_relogin' };
   if (data === 'set:relogin:cancel') return { type: 'set_relogin_cancel' };
+  if (data === 'set:emerg') return { type: 'set_emergency' };
+  if (data === 'set:emerg_clear') return { type: 'set_emergency_clear' };
+  if (data === 'nav:rules') return { type: 'nav_rules' };
+  if (data === 'nav:toggles') return { type: 'nav_toggles' };
+  if (data === 'nav:mode') return { type: 'nav_mode' };
+  if (data === 'mode:manual' || data === 'mode:assisted' || data === 'mode:auto') {
+    return { type: 'set_mode', mode: data.slice(5) };
+  }
+  if (data === 'tog:reply') return { type: 'toggle', name: 'autoReplyMessages' };
+  if (data === 'tog:bid') return { type: 'toggle', name: 'autoSubmitBids' };
+  if (data === 'tog:read') return { type: 'toggle', name: 'autoMarkNotificationsRead' };
+  if (data === 'rule:msg') return { type: 'rule_view', kind: 'message' };
+  if (data === 'rule:bid') return { type: 'rule_view', kind: 'bid' };
+  if (data === 'rule:msg:tog') return { type: 'rule_toggle', kind: 'message' };
+  if (data === 'rule:bid:tog') return { type: 'rule_toggle', kind: 'bid' };
+  const editM = /^edit:([0-9a-fA-F-]{8,36})$/.exec(data);
+  if (editM) return { type: 'edit_approval', approvalId: editM[1] };
 
   const pageM = /^page:(chats|unrd):(\d{1,4})$/.exec(data);
   if (pageM) {
@@ -283,6 +365,8 @@ export function actionLabelFa(action) {
   const map = {
     'messages.send': 'ارسال پیام',
     'bids.submit': 'ثبت پیشنهاد',
+    'notifications.mark_read': 'خواندن اعلان',
+    'messages.mark_seen': 'علامت خوانده‌شده',
     'rooms.scan': 'اسکن گفتگوها',
   };
   if (map[a]) return map[a];
@@ -359,6 +443,19 @@ export function formatStatusCard(s = {}) {
   if (newMsgs != null) lines.push(`• پیام جدید: ${toFaNum(newMsgs)}`);
   lines.push(`• تأیید باز: ${toFaNum(pending)}`);
 
+  if (s.executionMode || s.autoToday != null) {
+    lines.push('', '🎛 اجرای خودکار');
+    lines.push(`• حالت: ${modeLabelFa(s.executionMode || 'manual')}`);
+    if (s.emergencyStop) lines.push('• 🛑 توقف اضطراری فعال');
+    const at = s.autoToday || {};
+    lines.push(
+      `• امروز خودکار: پیام ${toFaNum(at.messages ?? 0)} · پیشنهاد ${toFaNum(at.bids ?? 0)}`
+    );
+    if (s.lastAutoAction) {
+      lines.push(`• آخرین خودکار: ${String(s.lastAutoAction).slice(0, 60)}`);
+    }
+  }
+
   lines.push('', '📡 فعالیت');
   if (s.lastScanAt) lines.push(`• آخرین اسکن: ${formatAgeFa(s.lastScanAt)}`);
   else lines.push('• آخرین اسکن: —');
@@ -408,28 +505,124 @@ export function formatSystemDetails(s = {}) {
   return lines.join('\n');
 }
 
+export function modeLabelFa(mode) {
+  if (mode === 'assisted') return '🟡 کمکی';
+  if (mode === 'auto') return '🔴 خودکار';
+  return '🟢 دستی';
+}
+
+export function lockAutoFa(on) {
+  return on ? '🟢 خودکار' : '🔒 قفل (نیاز به تأیید)';
+}
+
 export function formatSettingsCard(s = {}) {
   const stateFa = s.state === 'paused' ? '⏸ مکث' : '▶️ فعال';
-  const approvalMode = s.mutationNeedsApproval === false ? 'خاموش' : 'روشن';
+  const mode = s.executionMode || 'manual';
+  const toggles = s.toggles || {};
   const authLine =
     s.karlancerAuth === true
       ? '• نشست کارلنسر: ✅ فعال'
       : s.karlancerAuth === false
         ? '• نشست کارلنسر: ❌ منقضی / نامعتبر — «تمدید نشست» را بزنید'
         : '• نشست کارلنسر: ❔ نامشخص';
-  return [
+  const lines = [
     '⚙️ تنظیمات',
     '————————',
     '',
     `• ایجنت: ${stateFa}`,
-    '• اسکن: بررسی گفتگوها و موارد مهم',
-    `• عملیات نیازمند تأیید: ${approvalMode}`,
+    `• حالت اجرا: ${modeLabelFa(mode)}`,
+    s.emergencyStop ? '• 🛑 توقف اضطراری: فعال' : '• توقف اضطراری: خاموش',
+    '',
+    'وضعیت عملیات:',
+    `• ارسال پیام: ${lockAutoFa(Boolean(toggles.autoReplyMessages) && mode === 'auto')}`,
+    `• ثبت پیشنهاد: ${lockAutoFa(Boolean(toggles.autoSubmitBids) && mode === 'auto')}`,
+    `• خواندن اعلان: ${lockAutoFa(Boolean(toggles.autoMarkNotificationsRead) && mode !== 'manual')}`,
     authLine,
     '',
-    'از دکمه‌های زیر مکث، ادامه، اسکن یا تمدید نشست را بزنید.',
-    'هر ارسال واقعی فقط بعد از تأیید شما انجام می‌شود.',
+    'دکمه‌ها: دستی / کمکی / خودکار · قوانین خودکار · توقف اضطراری',
+    'پیش‌فرض: دستی — خودکار فقط با قانون و سقف روزانه.',
     '• ارتباط‌ها روی HTTPS',
     '⚠️ رمز عبور را در تلگرام نگه ندارید؛ پس از ورود پیام‌ها را پاک کنید.',
+  ];
+  return lines.join('\n');
+}
+
+export function formatModeCard(s = {}) {
+  const mode = s.executionMode || s.mode || 'manual';
+  return [
+    '🎛 حالت اجرا',
+    '————————',
+    '',
+    `فعلی: ${modeLabelFa(mode)}`,
+    '',
+    '🟢 دستی — تحلیل و پیشنهاد؛ هر ارسال نیاز به تأیید شما',
+    '🟡 کمکی — آماده‌سازی کامل؛ فقط عملیات کم‌ریسک خودکار',
+    '🔴 خودکار — فقط با قانون + سوئیچ + سقف روزانه (هرگز نامحدود نیست)',
+    s.emergencyStop ? '\n🛑 توقف اضطراری فعال است.' : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+export function formatRulesCard(s = {}) {
+  const msg = s.rules?.messageAuto || {};
+  const bid = s.rules?.bidAuto || {};
+  const limits = s.limits || {};
+  return [
+    '📜 قوانین خودکار',
+    '————————',
+    '',
+    '📨 پیام خودکار:',
+    `• وضعیت: ${msg.enabled ? 'روشن' : 'خاموش (پیش‌فرض)'}`,
+    `• امتیاز: ${msg.scoringAvailable ? (msg.matchScoreThreshold ?? '—') : 'هنوز در دسترس نیست'}`,
+    `• کلیدواژه‌ها: ${(msg.keywords || []).join('، ') || '—'}`,
+    `• حداقل بودجه: ${msg.budgetMin ?? '—'}`,
+    '',
+    '💼 پیشنهاد خودکار:',
+    `• وضعیت: ${bid.enabled ? 'روشن' : 'خاموش (پیش‌فرض)'}`,
+    `• دسته: ${(bid.categoryMatch || []).join('، ') || '—'}`,
+    `• آستانه بودجه: ${bid.budgetThreshold ?? '—'}`,
+    `• بدون پیشنهاد قبلی: ${bid.noExistingBid !== false ? 'بله' : 'خیر'}`,
+    `• اطمینان: ${bid.scoringAvailable ? (bid.confidenceThreshold ?? '—') : 'هنوز در دسترس نیست'}`,
+    '',
+    `سقف روزانه: پیام ${toFaNum(limits.maxAutoMessagesPerDay ?? 5)} · پیشنهاد ${toFaNum(limits.maxAutoBidsPerDay ?? 10)}`,
+    '',
+    'تا وقتی قانون پیکربندی و روشن نشود، خودکار اجرا نمی‌شود.',
+  ].join('\n');
+}
+
+export function formatTogglesCard(s = {}) {
+  const t = s.toggles || {};
+  const mode = s.executionMode || s.mode || 'manual';
+  return [
+    '🎚 سوئیچ‌های خودکار',
+    '————————',
+    '',
+    `حالت فعلی: ${modeLabelFa(mode)}`,
+    '',
+    `• پاسخ پیام: ${t.autoReplyMessages ? 'روشن' : 'خاموش'}`,
+    `• ثبت پیشنهاد: ${t.autoSubmitBids ? 'روشن' : 'خاموش'}`,
+    `• خواندن اعلان: ${t.autoMarkNotificationsRead ? 'روشن' : 'خاموش'}`,
+    '',
+    'حتی با سوئیچ روشن، بدون قانون و زیر سقف روزانه اجرا نمی‌شود.',
+  ].join('\n');
+}
+
+export function formatEmergencyCard(active) {
+  if (active) {
+    return [
+      '🛑 توقف اضطراری',
+      '————————',
+      '',
+      'همهٔ ارسال/پیشنهاد خودکار خاموش شد و حالت روی دستی است.',
+      'برای ادامه، «رفع توقف اضطراری» را بزنید و دوباره حالت را انتخاب کنید.',
+    ].join('\n');
+  }
+  return [
+    '🛑 توقف اضطراری',
+    '————————',
+    '',
+    'با تأیید، همهٔ سوئیچ‌های خودکار خاموش و حالت دستی می‌شود.',
   ].join('\n');
 }
 
@@ -437,6 +630,53 @@ export function formatSettingsCard(s = {}) {
  * @param {object[]} pending
  * @param {{ max?: number }} [opts]
  */
+
+export function riskLabelFa(risk) {
+  if (risk === 'high') return '🔴 بالا';
+  if (risk === 'medium') return '🟡 متوسط';
+  if (risk === 'low') return '🟢 پایین';
+  return String(risk || '—');
+}
+
+/** Pull AI reason / risk from approval payload when present. */
+export function extractApprovalMeta(approval) {
+  let payload = {};
+  try {
+    payload = JSON.parse(approval.payload_json || '{}');
+  } catch {
+    payload = {};
+  }
+  const reason =
+    payload.aiReason ||
+    payload.reason ||
+    payload.gateReasonFa ||
+    payload.analysisReason ||
+    null;
+  const risk = payload.risk || payload.riskLevel || null;
+  return { reason: reason != null ? String(reason).slice(0, 160) : null, risk, payload };
+}
+
+/**
+ * Rich approval card: Operation, Target, AI reason, Risk, Preview.
+ */
+export function formatApprovalDetail(approval) {
+  const { action, target, preview } = approvalTarget(approval);
+  const { reason, risk } = extractApprovalMeta(approval);
+  const shortId = String(approval.approval_id || '').slice(0, 8);
+  return [
+    '✅ تأیید عملیات',
+    '————————',
+    '',
+    `• عملیات: ${actionLabelFa(action)}`,
+    `• مقصد: ${target}`,
+    reason ? `• دلیل AI: ${reason}` : '• دلیل AI: —',
+    `• ریسک: ${riskLabelFa(risk || (action === 'messages.send' || action === 'bids.submit' ? 'high' : 'low'))}`,
+    preview ? `• پیش‌نمایش: «${truncatePersianText(preview, { max: 180, lines: 4 })}»` : '• پیش‌نمایش: —',
+    `• زمان: ${formatAgeFa(approval.created_at)}`,
+    `• شناسه: ${shortId}…`,
+  ].join('\n');
+}
+
 export function formatApprovalsList(pending, { max = 8 } = {}) {
   if (!pending?.length) {
     return {
@@ -462,11 +702,15 @@ export function formatApprovalsList(pending, { max = 8 } = {}) {
     const previewLine = preview
       ? `• متن: «${truncatePersianText(preview, { max: 100, lines: 2 })}»`
       : null;
+    const risk = extractApprovalMeta(a).risk;
+    const reason = extractApprovalMeta(a).reason;
     blocks.push(
       [
         `🧾 مورد ${toFaNum(i + 1)} از ${toFaNum(pending.length)}`,
         `• عملیات: ${actionLabelFa(action)}`,
         `• مقصد: ${target}`,
+        reason ? `• دلیل AI: ${reason}` : null,
+        risk ? `• ریسک: ${riskLabelFa(risk)}` : null,
         previewLine,
         `• زمان: ${formatAgeFa(a.created_at)}`,
         `• شناسه: ${shortId}…`,
@@ -541,13 +785,14 @@ export function formatHelp() {
     `• ${BTN.CHATS} — لیست گفتگوها`,
     `• ${BTN.ALERTS} — موارد نیازمند توجه`,
     `• ${BTN.APPROVALS} — تأیید یا رد عملیات`,
-    `• ${BTN.SETTINGS} — مکث / ادامه / اسکن / تمدید نشست`,
+    `• ${BTN.SETTINGS} — حالت اجرا / قوانین / توقف اضطراری`,
     '',
-    'داخل هر گفتگو: مشاهده · تحلیل AI · نوت',
+    'داخل هر گفتگو: مشاهده · تحلیل · پیش‌نویس · ارسال · قانون',
     'قبل از ارسال، پیش‌نمایش و تأیید نهایی می‌آید.',
     '',
     'دستورات: /start · /status · /chats · /unread',
-    '/approvals · /settings · /scan · /help',
+    '/approvals · /settings · /mode · /automation · /show_rules',
+    '/emergency_stop · /scan · /help',
     '',
     'عملیات حساس فقط بعد از تأیید شما اجرا می‌شود.',
     '',

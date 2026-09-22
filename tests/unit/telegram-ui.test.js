@@ -102,6 +102,10 @@ test('parseCallbackData covers approve/reject/nav/settings/pagination', () => {
   assert.deepEqual(parseCallbackData('nav:set'), { type: 'nav_settings' });
   assert.deepEqual(parseCallbackData('dash:details'), { type: 'dash_details' });
   assert.deepEqual(parseCallbackData('set:scan'), { type: 'set_scan' });
+  assert.deepEqual(parseCallbackData('mode:auto'), { type: 'set_mode', mode: 'auto' });
+  assert.deepEqual(parseCallbackData('set:emerg'), { type: 'set_emergency' });
+  assert.deepEqual(parseCallbackData('nav:rules'), { type: 'nav_rules' });
+  assert.deepEqual(parseCallbackData('tog:reply'), { type: 'toggle', name: 'autoReplyMessages' });
   assert.deepEqual(parseCallbackData('scan:refresh'), { type: 'scan_refresh' });
   assert.deepEqual(parseCallbackData('scan:details'), { type: 'scan_details' });
   assert.deepEqual(parseCallbackData('page:chats:2'), { type: 'page_chats', page: 2 });
@@ -206,7 +210,8 @@ test('help / welcome / settings / loading / friendly errors', () => {
   assert.doesNotMatch(h, /Mutation/i);
   assert.match(formatWelcome({ karlancerAuth: true }), /مرکز عملیات|داشبورد|کارلنسر: متصل/);
   assert.match(formatSettingsCard({ state: 'paused' }), /مکث/);
-  assert.match(formatSettingsCard({ state: 'running' }), /عملیات نیازمند تأیید/);
+  assert.match(formatSettingsCard({ state: 'running', karlancerAuth: true }), /حالت اجرا|دستی|قفل/);
+  assert.doesNotMatch(formatSettingsCard({ state: 'running' }), /Mutation|Endpoint/i);
   assert.match(formatScanQueued('abcdefgh-ijkl'), /اسکن|صف/);
   assert.match(formatDecideResult({ approve: true, approvalId: 'abcdefgh', jobStatus: 'queued' }), /تأیید شد/);
   assert.match(formatLoading('ai'), /تحلیل/);

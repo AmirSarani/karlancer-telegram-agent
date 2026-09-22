@@ -18,12 +18,14 @@ import {
 } from '../../src/telegram/room-card.js';
 import { parseCallbackData } from '../../src/telegram/ui.js';
 
-test('roomCardKeyboard has messages/ai/draft/tech/back under 64 bytes', () => {
+test('roomCardKeyboard has view/analyze/draft/send/rule under 64 bytes', () => {
   const kb = roomCardKeyboard(7241431);
   const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(data.includes('room:msg:7241431'));
   assert.ok(data.includes('room:ai:7241431'));
   assert.ok(data.includes('room:dft:7241431'));
+  assert.ok(data.includes('room:snd:7241431'));
+  assert.ok(data.includes('room:rule:7241431'));
   assert.ok(data.includes('room:tch:7241431'));
   assert.ok(data.includes('room:ref:7241431'));
   assert.ok(data.includes('room:done:7241431'));
@@ -61,6 +63,8 @@ test('parseRoomCallback includes new msg/dft/tch/rgn', () => {
   assert.deepEqual(parseCallbackData('room:dft:9'), { type: 'room_draft', roomId: '9' });
   assert.deepEqual(parseCallbackData('room:tch:9'), { type: 'room_tech', roomId: '9' });
   assert.deepEqual(parseCallbackData('room:rgn:9'), { type: 'room_regen', roomId: '9' });
+  assert.deepEqual(parseCallbackData('room:snd:9'), { type: 'room_send', roomId: '9' });
+  assert.deepEqual(parseCallbackData('room:rule:9'), { type: 'room_auto_rule', roomId: '9' });
   assert.equal(parseRoomCallback('evil'), null);
 });
 

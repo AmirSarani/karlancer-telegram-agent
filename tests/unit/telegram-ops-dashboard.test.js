@@ -192,7 +192,8 @@ test('approvals confirm copy is professional', () => {
 });
 
 test('settings and help are user-language without Mutation jargon', () => {
-  assert.match(formatSettingsCard({ state: 'running' }), /عملیات نیازمند تأیید/);
+  assert.match(formatSettingsCard({ state: 'running' }), /حالت اجرا|دستی/);
+  assert.doesNotMatch(formatSettingsCard({ state: 'running' }), /Mutation|Endpoint/i);
   assert.doesNotMatch(formatHelp(), /Mutation|Candidate|Job ID/i);
   assert.match(formatHelp(), /نقشه|صفحه/);
   for (const row of settingsInlineKeyboard('running').inline_keyboard) {

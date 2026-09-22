@@ -27,7 +27,11 @@ import {
   formatComplete,
   formatFriendlyError,
   friendlyErrorText,
+  formatRulesCard,
+  rulesInlineKeyboard,
 } from './ui.js';
+import { createPermissionGate } from './permission-gate.js';
+import { createMutationRequester } from './mutation-request.js';
 
 /**
  * @param {object} deps
@@ -40,6 +44,10 @@ import {
 export function createRoomFlows(deps) {
   const { db, queue, api, llm, menuOpts } = deps;
   const roomState = createRoomState(db);
+  const gate = deps.gate || (db ? createPermissionGate(db) : null);
+  const mutations =
+    deps.mutations ||
+    (queue && gate ? createMutationRequester({ queue, gate }) : null);
 
   function sendApiLive() {
     return Boolean(getVerifiedMutation('messages.send'));
@@ -215,33 +223,78 @@ export function createRoomFlows(deps) {
     }
 
     const live = sendApiLive();
-    const job = queue.create({
-      goal: 'messages.send',
-      requiresApproval: true,
-      payload: { roomId: String(roomId), text },
-      requestedBy: `telegram:${ctx.from?.id}`,
-      targetRef: String(roomId),
-      operationId: crypto.randomUUID(),
-      idempotencyKey: `msg-send:${roomId}:${crypto
-        .createHash('sha256')
-        .update(text)
-        .digest('hex')
-        .slice(0, 16)}`,
-    });
+    const requestedBy = `telegram:${ctx.from?.id}`;
+    const opId = crypto.randomUUID();
+    const idempotencyKey = `msg-send:${roomId}:${crypto
+      .createHash('sha256')
+      .update(text)
+      .digest('hex')
+      .slice(0, 16)}`;
 
-    const approval = queue.getApprovalForJob(job.jobId);
-    if (!approval) {
-      await ctx.reply('ثبت تأیید ناموفق بود.', menuOpts());
-      return;
-    }
-    const decided = queue.decideApproval(approval.approval_id, {
-      approve: true,
-      decidedBy: `telegram:${ctx.from?.id}`,
-    });
+    let decided = null;
+    let job = null;
 
-    if (decided?.tampered) {
-      await ctx.reply('⚠️ payload مشکوک — ارسال انجام نشد.', menuOpts());
-      return;
+    if (mutations) {
+      const out = mutations.request({
+        action: 'messages.send',
+        payload: {
+          roomId: String(roomId),
+          text,
+          risk: 'high',
+          aiReason: 'تأیید دستی مالک پس از پیش‌نمایش',
+        },
+        gateCtx: {
+          source: 'owner_confirm',
+          roomId: String(roomId),
+          text,
+          riskHint: 'high',
+        },
+        requestedBy,
+        targetRef: String(roomId),
+        operationId: opId,
+        idempotencyKey,
+      });
+      if (out.denied) {
+        await ctx.reply(
+          `⛔ ارسال مجاز نیست.\n${out.verdict?.reasonFa || out.verdict?.reason || ''}`,
+          menuOpts()
+        );
+        return;
+      }
+      if (out.error) {
+        await ctx.reply('ثبت تأیید ناموفق بود.', menuOpts());
+        return;
+      }
+      decided = out.decided;
+      job = out.job;
+      if (decided?.tampered) {
+        await ctx.reply('⚠️ payload مشکوک — ارسال انجام نشد.', menuOpts());
+        return;
+      }
+    } else {
+      // Fallback without gate (should be rare)
+      job = queue.create({
+        goal: 'messages.send',
+        requiresApproval: true,
+        payload: { roomId: String(roomId), text },
+        requestedBy,
+        targetRef: String(roomId),
+        operationId: opId,
+        idempotencyKey,
+      });
+      const approval = queue.getApprovalForJob(job.jobId);
+      if (!approval) {
+        await ctx.reply('ثبت تأیید ناموفق بود.', menuOpts());
+        return;
+      }
+      decided = queue.decideApproval(approval.approval_id, {
+        approve: true,
+        decidedBy: requestedBy,
+      });
+      if (decided?.tampered) {
+        await ctx.reply('⚠️ payload مشکوک — ارسال انجام نشد.', menuOpts());
+        return;
+      }
     }
 
     roomState.setDecision(roomId, {
@@ -269,7 +322,7 @@ export function createRoomFlows(deps) {
     const msg = [
       formatComplete('send', 'ارسال در صف قرار گرفت.'),
       `گفتگو ثبت شد.`,
-      decided?.job?.status ? `وضعیت: ${decided.job.status}` : null,
+      (decided?.job || job)?.status ? `وضعیت: ${(decided?.job || job).status}` : null,
     ]
       .filter(Boolean)
       .join('\n');
@@ -277,6 +330,23 @@ export function createRoomFlows(deps) {
       ctx,
       msg,
       { reply_markup: roomCardKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) }
+    );
+  }
+
+  /** Link from conversation card → automation rules. */
+  async function showRoomAutoRule(ctx, roomId) {
+    const s = gate ? gate.settings.get() : {};
+    const text = [
+      formatRulesCard(s),
+      '',
+      `گفتگوی فعلی: ${roomId}`,
+      'از اینجا قوانین سراسری را ببینید یا روشن/خاموش کنید.',
+    ].join('\n');
+    await editOrReply(
+      ctx,
+      text,
+      { reply_markup: rulesInlineKeyboard() },
       { edit: Boolean(ctx.callbackQuery) }
     );
   }
@@ -533,6 +603,8 @@ export function createRoomFlows(deps) {
 
   return {
     roomState,
+    gate,
+    mutations,
     replyRoomsList,
     replyRoomCard,
     replyRoomMessages,
@@ -540,6 +612,7 @@ export function createRoomFlows(deps) {
     replyDraftScreen,
     showSendConfirm,
     approveSend,
+    showRoomAutoRule,
     rejectRoom,
     startNoteFlow,
     handleNoteText,

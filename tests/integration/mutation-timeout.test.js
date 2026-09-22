@@ -18,6 +18,9 @@ import {
 } from '../../src/api/contracts/verified-mutation.js';
 import { z } from 'zod';
 
+// Isolate from operator configs/verified-mutations.local.json on this machine
+process.env.VERIFIED_MUTATION_CONFIG_PATH = path.join(os.tmpdir(), 'klr-no-mutations.json');
+
 function tmpDb() {
   return openDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'klr-')), 'm.sqlite'));
 }

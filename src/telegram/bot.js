@@ -5,14 +5,22 @@ import {
   statusInlineKeyboard,
   afterScanInlineKeyboard,
   settingsInlineKeyboard,
+  modeInlineKeyboard,
+  togglesInlineKeyboard,
+  rulesInlineKeyboard,
   homeInlineKeyboard,
   approvalActionKeyboard,
   parseCallbackData,
   formatStatusCard,
   formatApprovalsList,
+  formatApprovalDetail,
   formatWelcome,
   formatHelp,
   formatSettingsCard,
+  formatModeCard,
+  formatRulesCard,
+  formatTogglesCard,
+  formatEmergencyCard,
   formatSystemDetails,
   systemDetailsKeyboard,
   formatScanQueued,
@@ -37,6 +45,8 @@ import {
   formatAgeFa,
   approvalTarget,
 } from './ui.js';
+import { createPermissionGate } from './permission-gate.js';
+import { createMutationRequester } from './mutation-request.js';
 import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
 import {
@@ -141,9 +151,13 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     return { reply_markup: mainMenuKeyboard(runtime.state) };
   }
 
+  const gate = db != null ? createPermissionGate(db) : null;
+  const mutations =
+    queue && gate ? createMutationRequester({ queue, gate }) : null;
+
   const roomFlows =
     db != null
-      ? createRoomFlows({ db, queue, api, llm, menuOpts })
+      ? createRoomFlows({ db, queue, api, llm, menuOpts, gate, mutations })
       : null;
 
   /** @type {{ chatId: number, messageId: number, jobId?: string } | null} */
@@ -351,6 +365,28 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       }
     }
 
+    if (gate) {
+      const s = gate.settings.get();
+      card.executionMode = s.mode;
+      card.emergencyStop = s.emergencyStop;
+      card.toggles = s.toggles;
+      card.autoToday = gate.getTodayAutoCounts();
+      try {
+        const recent = gate.listAudit({ limit: 1 });
+        if (recent[0]) {
+          let detail = {};
+          try {
+            detail = JSON.parse(recent[0].detail_json || '{}');
+          } catch {
+            detail = {};
+          }
+          card.lastAutoAction = `${recent[0].action} · ${detail.reasonFa || detail.reason || ''}`;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     return card;
   }
 
@@ -385,12 +421,150 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
   }
 
   async function replySettings(ctx, { edit = false } = {}) {
+    const exec = gate ? gate.settings.get() : {};
     const text = formatSettingsCard({
       state: runtime.state,
       karlancerAuth: api?.client ? Boolean(api.client.hasAuth) : null,
+      executionMode: exec.mode || 'manual',
+      emergencyStop: Boolean(exec.emergencyStop),
+      toggles: exec.toggles || {},
     });
-    const reply_markup = settingsInlineKeyboard(runtime.state);
+    const reply_markup = settingsInlineKeyboard(runtime.state, {
+      mode: exec.mode,
+      emergencyStop: Boolean(exec.emergencyStop),
+    });
     await editOrReply(ctx, text, { reply_markup }, { edit });
+  }
+
+  async function replyMode(ctx, { edit = false } = {}) {
+    const exec = gate ? gate.settings.get() : { mode: 'manual' };
+    await editOrReply(
+      ctx,
+      formatModeCard({ executionMode: exec.mode, emergencyStop: exec.emergencyStop }),
+      { reply_markup: modeInlineKeyboard(exec.mode || 'manual') },
+      { edit }
+    );
+  }
+
+  async function replyRules(ctx, { edit = false } = {}) {
+    const exec = gate ? gate.settings.get() : {};
+    await editOrReply(
+      ctx,
+      formatRulesCard(exec),
+      { reply_markup: rulesInlineKeyboard() },
+      { edit }
+    );
+  }
+
+  async function replyToggles(ctx, { edit = false } = {}) {
+    const exec = gate ? gate.settings.get() : {};
+    await editOrReply(
+      ctx,
+      formatTogglesCard({ ...exec, executionMode: exec.mode }),
+      { reply_markup: togglesInlineKeyboard(exec.toggles || {}) },
+      { edit }
+    );
+  }
+
+  async function replyAutomation(ctx, { edit = false } = {}) {
+    const exec = gate ? gate.settings.get() : {};
+    const counts = gate ? gate.getTodayAutoCounts() : { messages: 0, bids: 0 };
+    const text = [
+      formatTogglesCard({ ...exec, executionMode: exec.mode }),
+      '',
+      formatRulesCard(exec),
+      '',
+      `امروز: پیام خودکار ${toFaNum(counts.messages)} / ${toFaNum(exec.limits?.maxAutoMessagesPerDay ?? 5)}`,
+      `پیشنهاد خودکار ${toFaNum(counts.bids)} / ${toFaNum(exec.limits?.maxAutoBidsPerDay ?? 10)}`,
+    ].join('\n');
+    await editOrReply(
+      ctx,
+      text,
+      { reply_markup: settingsInlineKeyboard(runtime.state, exec) },
+      { edit }
+    );
+  }
+
+  async function doEmergencyStop(ctx, { edit = false } = {}) {
+    if (!gate) {
+      await ctx.reply('ذخیره تنظیمات در دسترس نیست.', menuOpts());
+      return;
+    }
+    gate.emergencyStop();
+    const text = formatEmergencyCard(true);
+    await editOrReply(
+      ctx,
+      text,
+      { reply_markup: settingsInlineKeyboard(runtime.state, { emergencyStop: true }) },
+      { edit }
+    );
+  }
+
+  async function doEmergencyClear(ctx, { edit = false } = {}) {
+    if (!gate) {
+      await ctx.reply('ذخیره تنظیمات در دسترس نیست.', menuOpts());
+      return;
+    }
+    gate.clearEmergency({ keepManual: true });
+    await replySettings(ctx, { edit });
+  }
+
+  async function doSetMode(ctx, mode, { edit = false } = {}) {
+    if (!gate) {
+      await ctx.reply('ذخیره تنظیمات در دسترس نیست.', menuOpts());
+      return;
+    }
+    if (gate.settings.get().emergencyStop && mode !== 'manual') {
+      await editOrReply(
+        ctx,
+        '🛑 اول توقف اضطراری را بردارید، بعد حالت خودکار/کمکی را انتخاب کنید.',
+        { reply_markup: settingsInlineKeyboard(runtime.state, { emergencyStop: true }) },
+        { edit }
+      );
+      return;
+    }
+    gate.settings.setMode(mode);
+    await replyMode(ctx, { edit });
+  }
+
+  async function doToggle(ctx, name, { edit = false } = {}) {
+    if (!gate) {
+      await ctx.reply('ذخیره تنظیمات در دسترس نیست.', menuOpts());
+      return;
+    }
+    const cur = gate.settings.get();
+    if (cur.emergencyStop) {
+      await editOrReply(
+        ctx,
+        '🛑 توقف اضطراری فعال است — سوئیچ‌ها قفل‌اند.',
+        { reply_markup: settingsInlineKeyboard(runtime.state, { emergencyStop: true }) },
+        { edit }
+      );
+      return;
+    }
+    const next = !Boolean(cur.toggles?.[name]);
+    gate.settings.setToggle(name, next);
+    await replyToggles(ctx, { edit });
+  }
+
+  async function doRuleToggle(ctx, kind, { edit = false } = {}) {
+    if (!gate) {
+      await ctx.reply('ذخیره تنظیمات در دسترس نیست.', menuOpts());
+      return;
+    }
+    const cur = gate.settings.get();
+    if (kind === 'message') {
+      const enabled = !cur.rules.messageAuto.enabled;
+      gate.settings.update({
+        rules: { messageAuto: { ...cur.rules.messageAuto, enabled } },
+      });
+    } else if (kind === 'bid') {
+      const enabled = !cur.rules.bidAuto.enabled;
+      gate.settings.update({
+        rules: { bidAuto: { ...cur.rules.bidAuto, enabled } },
+      });
+    }
+    await replyRules(ctx, { edit });
   }
 
   async function startReloginFlow(ctx, { edit = false } = {}) {
@@ -440,17 +614,10 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     }
     const firstKb = keyboards[0];
     const a = pending[0];
-    const { action, target, preview } = approvalTarget(a);
     const summary = [
       `✅ تأییدهای در انتظار (${toFaNum(pending.length)})`,
-      '————————',
       '',
-      '🧾 مورد اول',
-      `• عملیات: ${actionLabelFa(action)}`,
-      `• مقصد: ${target}`,
-      preview ? `• متن: «${truncatePreview(preview, 100)}»` : null,
-      `• زمان: ${formatAgeFa(a.created_at)}`,
-      `• شناسه: ${String(a.approval_id).slice(0, 8)}…`,
+      formatApprovalDetail(a),
       pending.length > 1 ? '\nبقیه موارد در پیام‌های بعدی.' : '',
     ]
       .filter(Boolean)
@@ -458,20 +625,9 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     await editOrReply(ctx, summary, { reply_markup: firstKb }, { edit });
     for (let i = 1; i < Math.min(pending.length, 8); i++) {
       const item = pending[i];
-      const t = approvalTarget(item);
-      await ctx.reply(
-        [
-          `🧾 مورد ${toFaNum(i + 1)}`,
-          `• عملیات: ${actionLabelFa(t.action)}`,
-          `• مقصد: ${t.target}`,
-          t.preview ? `• متن: «${truncatePreview(t.preview, 100)}»` : null,
-          `• زمان: ${formatAgeFa(item.created_at)}`,
-          `• شناسه: ${String(item.approval_id).slice(0, 8)}…`,
-        ]
-          .filter(Boolean)
-          .join('\n'),
-        { reply_markup: approvalActionKeyboard(item.approval_id) }
-      );
+      await ctx.reply(formatApprovalDetail(item), {
+        reply_markup: approvalActionKeyboard(item.approval_id),
+      });
     }
   }
 
@@ -602,6 +758,30 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     await replySettings(ctx);
+  });
+
+  bot.command('mode', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await replyMode(ctx);
+  });
+
+  bot.command('show_rules', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await replyRules(ctx);
+  });
+
+  bot.command('automation', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await replyAutomation(ctx);
+  });
+
+  bot.command('emergency_stop', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await doEmergencyStop(ctx);
   });
 
   bot.command('status', async (ctx) => {
@@ -762,6 +942,88 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       return;
     }
 
+    if (parsed.type === 'nav_mode') {
+      await ctx.answerCallbackQuery();
+      await replyMode(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_rules') {
+      await ctx.answerCallbackQuery();
+      await replyRules(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_toggles') {
+      await ctx.answerCallbackQuery();
+      await replyToggles(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_mode') {
+      await ctx.answerCallbackQuery({ text: 'حالت…' });
+      await doSetMode(ctx, parsed.mode, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'toggle') {
+      await ctx.answerCallbackQuery({ text: 'سوئیچ…' });
+      await doToggle(ctx, parsed.name, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'rule_view') {
+      await ctx.answerCallbackQuery();
+      await replyRules(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'rule_toggle') {
+      await ctx.answerCallbackQuery({ text: 'قانون…' });
+      await doRuleToggle(ctx, parsed.kind, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_emergency') {
+      await ctx.answerCallbackQuery({ text: 'توقف اضطراری' });
+      await doEmergencyStop(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_emergency_clear') {
+      await ctx.answerCallbackQuery({ text: 'رفع توقف' });
+      await doEmergencyClear(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'edit_approval') {
+      await ctx.answerCallbackQuery({ text: 'ویرایش' });
+      const appr = queue?.getApproval?.(parsed.approvalId);
+      if (!appr) {
+        await ctx.reply('مورد تأیید پیدا نشد.', menuOpts());
+        return;
+      }
+      let payload = {};
+      try {
+        payload = JSON.parse(appr.payload_json || '{}');
+      } catch {
+        payload = {};
+      }
+      const roomId = payload.roomId;
+      if (roomId && roomFlows) {
+        if (payload.text) {
+          roomFlows.roomState.setDraft(roomId, { text: payload.text, source: 'approval_edit' });
+        }
+        await roomFlows.replyDraftScreen(ctx, roomId, { edit: true });
+      } else {
+        await ctx.reply(
+          'ویرایش مستقیم برای این عملیات از پیش‌نویس گفتگو انجام می‌شود.\nگفتگو را باز کنید و پیش‌نویس را عوض کنید.',
+          menuOpts()
+        );
+      }
+      return;
+    }
+
     if (parsed.type === 'nav_help') {
       await ctx.answerCallbackQuery();
       await replyHelp(ctx, { edit: true });
@@ -913,6 +1175,16 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
         await roomFlows.replyRoomCard(ctx, rid, { edit: true });
         return;
       }
+      if (parsed.type === 'room_send') {
+        await ctx.answerCallbackQuery({ text: 'پیش‌نمایش ارسال…' });
+        await roomFlows.showSendConfirm(ctx, rid);
+        return;
+      }
+      if (parsed.type === 'room_auto_rule') {
+        await ctx.answerCallbackQuery({ text: 'قوانین…' });
+        await roomFlows.showRoomAutoRule(ctx, rid);
+        return;
+      }
       if (parsed.type === 'room_approve') {
         // Confirmation step — do not send yet
         await ctx.answerCallbackQuery({ text: 'پیش‌نمایش…' });
@@ -1001,6 +1273,8 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
   return {
     bot,
     runtime,
+    gate,
+    mutations,
     getPendingScanMessage: () => pendingScanMessage,
     clearPendingScanMessage: () => {
       pendingScanMessage = null;
