@@ -201,7 +201,9 @@ export function settingsInlineKeyboard(agentState = 'running', exec = {}) {
   } else {
     kb.text('⏸ مکث ایجنت', 'set:pause');
   }
-  kb.text('📡 اجرای اسکن', 'set:scan')
+  kb.row()
+    .text('📡 اسکن اتاق‌ها', 'set:scan')
+    .text('🔥 فرصت‌ها', 'opp:hub')
     .row()
     .text('🔐 تمدید نشست', 'set:relogin')
     .text('🎚 سوئیچ‌ها', 'nav:toggles')
@@ -287,6 +289,7 @@ export function parseCallbackData(data) {
   if (data === 'set:emerg') return { type: 'set_emergency' };
   if (data === 'set:emerg_clear') return { type: 'set_emergency_clear' };
   if (data === 'nav:rules') return { type: 'nav_rules' };
+  if (data === 'opp:hub') return { type: 'opp_hub' };
   if (data === 'nav:toggles') return { type: 'nav_toggles' };
   if (data === 'nav:mode') return { type: 'nav_mode' };
   if (data === 'mode:manual' || data === 'mode:assisted' || data === 'mode:auto') {

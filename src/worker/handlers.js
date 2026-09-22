@@ -7,6 +7,7 @@ import { memoryAppend } from '../memory/store.js';
 import { bidIdempotencyKey } from '../api/contracts/verified-mutation.js';
 import { createRoomState } from '../agent/room-state.js';
 import { runMessagesPoll } from '../agent/messages-poll.js';
+import { createOpportunityScanner } from '../opportunity/scanner.js';
 
 /**
  * @param {object} ctx
@@ -438,6 +439,38 @@ export async function handleJob(ctx, job) {
       if (!p.projectId) return { ok: false, errorCode: 'invalid_input', detail: {} };
       const check = await api.bids.check([p.projectId]);
       return { ok: true, result: { projectId: p.projectId, weBid: check.weBidFor(p.projectId), check } };
+    }
+
+    case 'opportunities.scan': {
+      const scanner = createOpportunityScanner({
+        db,
+        api,
+        mutations: ctx.mutations || null,
+        tenantId: job.tenantId || 'default',
+        notify: ctx.notifyOpportunity || null,
+      });
+      // Respect agent pause / emergency via scanner internals + settings
+      const settings = scanner.settingsStore.get();
+      if (settings.emergencyStop && !p.manual) {
+        // still allow analyze-only path inside scanner; it downgrades AUTO_EXECUTE
+      }
+      const out = await scanner.scan({
+        manual: Boolean(p.manual),
+        pages: p.pages || 1,
+        includeInvites: p.includeInvites !== false,
+        searchParams: p.searchParams || {},
+      });
+      await emit(ctx, 'opportunities.scanned', {
+        scannedAt: out.scannedAt,
+        scanned: out.scanned,
+        newCount: out.newCount,
+        matched: out.matched,
+        drafts: out.drafts,
+        notified: out.notified,
+        skipped: out.skipped || false,
+        reason: out.reason || null,
+      });
+      return { ok: Boolean(out.ok), result: out };
     }
 
     default:

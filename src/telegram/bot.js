@@ -47,6 +47,20 @@ import {
 } from './ui.js';
 import { createPermissionGate } from './permission-gate.js';
 import { createMutationRequester } from './mutation-request.js';
+import {
+  formatOpportunityCard,
+  opportunityCardKeyboard,
+  opportunitiesListKeyboard,
+  opportunityRulesKeyboard,
+  formatOpportunitiesHub,
+  formatOpportunityScanResult,
+  formatOpportunityRule,
+  parseOpportunityCallback,
+} from './opportunity-ux.js';
+import { createOpportunityScanner } from '../opportunity/scanner.js';
+import { createOpportunityStore } from '../opportunity/store.js';
+import { isScoringConfigured } from '../opportunity/scoring.js';
+
 import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
 import {
@@ -766,6 +780,12 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     await replyMode(ctx);
   });
 
+  bot.command('opportunities', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await replyOpportunitiesHub(ctx);
+  });
+
   bot.command('show_rules', async (ctx) => {
     if (await denyIfNotOwner(ctx)) return;
     touch();
@@ -908,6 +928,89 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     if (action === 'help') return replyHelp(ctx);
   });
 
+
+  function getOppScanner(notifyFn = null) {
+    if (!db || !api) return null;
+    return createOpportunityScanner({
+      db,
+      api,
+      mutations,
+      tenantId: 'default',
+      notify: notifyFn,
+    });
+  }
+
+  async function replyOpportunitiesHub(ctx, { edit = false } = {}) {
+    if (!db) {
+      await ctx.reply('ذخیره فرصت‌ها در دسترس نیست.', menuOpts());
+      return;
+    }
+    const store = createOpportunityStore(db);
+    const list = store.list({ limit: 20 });
+    const scan = store.getScanState();
+    const profile = store.getScoringProfile();
+    const text = formatOpportunitiesHub({
+      count: list.length,
+      lastScanAt: scan.lastScanAt,
+      scoringAvailable: isScoringConfigured(profile),
+    });
+    await editOrReply(
+      ctx,
+      text,
+      { reply_markup: opportunitiesListKeyboard(list) },
+      { edit }
+    );
+  }
+
+  async function doOpportunityScan(ctx, { edit = false } = {}) {
+    const scanner = getOppScanner(async (text, meta) => {
+      try {
+        const opp = meta?.opportunity;
+        await ctx.api.sendMessage(ctx.chat.id, text, {
+          reply_markup: opp?.id ? opportunityCardKeyboard(opp.id) : undefined,
+        });
+      } catch (e) {
+        /* ignore notify errors */
+      }
+    });
+    if (!scanner) {
+      await ctx.reply('اسکنر فرصت آماده نیست.', menuOpts());
+      return;
+    }
+    await editOrReply(ctx, '🔍 در حال اسکن فرصت‌ها…', {}, { edit });
+    const out = await scanner.scan({ manual: true, pages: 1, includeInvites: true });
+    await editOrReply(
+      ctx,
+      formatOpportunityScanResult(out),
+      { reply_markup: opportunitiesListKeyboard(scanner.store.list({ limit: 10 })) },
+      { edit: true }
+    );
+  }
+
+  async function replyOpportunityRules(ctx, { edit = false } = {}) {
+    if (!db) {
+      await ctx.reply('قوانین در دسترس نیست.', menuOpts());
+      return;
+    }
+    const store = createOpportunityStore(db);
+    const rules = store.listRules();
+    const lines = ['📜 قوانین فرصت', '————————', ''];
+    if (!rules.length) {
+      lines.push('هنوز قانونی نیست. «نمونه قانون» را بزنید.');
+    } else {
+      for (const r of rules.slice(0, 15)) {
+        lines.push(`${r.enabled ? '✅' : '⛔'} ${r.name} → ${r.action}`);
+      }
+    }
+    await editOrReply(
+      ctx,
+      lines.join('\n'),
+      { reply_markup: opportunityRulesKeyboard(rules) },
+      { edit }
+    );
+  }
+
+
   // —— Inline callbacks ——
   bot.on('callback_query:data', async (ctx) => {
     if (await denyIfNotOwner(ctx, { asCallback: true })) return;
@@ -946,6 +1049,108 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       await ctx.answerCallbackQuery();
       await replyMode(ctx, { edit: true });
       return;
+    }
+
+    if (parsed.type === 'opp_hub') {
+      await ctx.answerCallbackQuery();
+      await replyOpportunitiesHub(ctx, { edit: true });
+      return;
+    }
+
+    const oppCb = parseOpportunityCallback(ctx.callbackQuery.data);
+    if (oppCb) {
+      if (oppCb.type === 'opp_scan') {
+        await ctx.answerCallbackQuery({ text: 'اسکن فرصت…' });
+        await doOpportunityScan(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_list' || oppCb.type === 'opp_hub') {
+        await ctx.answerCallbackQuery();
+        await replyOpportunitiesHub(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_rules') {
+        await ctx.answerCallbackQuery();
+        await replyOpportunityRules(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_rule_sample') {
+        await ctx.answerCallbackQuery({ text: 'نمونه قانون' });
+        if (db) {
+          const store = createOpportunityStore(db);
+          const existing = store.listRules();
+          if (!existing.some((r) => r.name === 'نمونه-وردپرس')) {
+            store.createRule({
+              name: 'نمونه-وردپرس',
+              action: 'CREATE_BID_DRAFT',
+              priority: 50,
+              conditions: [
+                { field: 'skills', op: 'has_any', value: ['وردپرس', 'wordpress'] },
+              ],
+            });
+          }
+          // enable scoring profile lightly so scoringAvailable can turn on
+          const cur = store.getScoringProfile();
+          if (!(cur.preferredSkills || []).length) {
+            store.setScoringProfile({
+              ...cur,
+              preferredSkills: ['وردپرس', 'wordpress'],
+              budgetMin: 1_000_000,
+            });
+          }
+          const scanner = getOppScanner();
+          scanner?.syncScoringAvailable?.();
+        }
+        await replyOpportunityRules(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_rule_toggle' && db) {
+        await ctx.answerCallbackQuery({ text: 'قانون…' });
+        const store = createOpportunityStore(db);
+        const rule = store.getRule(oppCb.ruleId);
+        if (rule) store.setRuleEnabled(oppCb.ruleId, !rule.enabled);
+        await replyOpportunityRules(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_view' && db) {
+        await ctx.answerCallbackQuery();
+        const store = createOpportunityStore(db);
+        const row = store.get(oppCb.projectId);
+        if (!row) {
+          await editOrReply(ctx, 'فرصت پیدا نشد.', { reply_markup: opportunitiesListKeyboard([]) }, { edit: true });
+          return;
+        }
+        const card = {
+          opportunity: row.opportunity || row,
+          score: row.score,
+          reasons: row.scoreReasons || [],
+          decision: row.decision,
+        };
+        await editOrReply(
+          ctx,
+          formatOpportunityCard(card),
+          { reply_markup: opportunityCardKeyboard(row.id) },
+          { edit: true }
+        );
+        return;
+      }
+      if (oppCb.type === 'opp_ignore' && db) {
+        await ctx.answerCallbackQuery({ text: 'نادیده گرفته شد' });
+        createOpportunityStore(db).setState(oppCb.projectId, 'IGNORED');
+        await replyOpportunitiesHub(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_draft' && db) {
+        await ctx.answerCallbackQuery({ text: 'پیش‌نویس' });
+        createOpportunityStore(db).setState(oppCb.projectId, 'ACTION_CREATED');
+        await editOrReply(
+          ctx,
+          '📝 پیش‌نویس علامت‌گذاری شد. ارسال زنده فقط از مسیر تأیید/PermissionGate.',
+          { reply_markup: opportunityCardKeyboard(oppCb.projectId) },
+          { edit: true }
+        );
+        return;
+      }
     }
 
     if (parsed.type === 'nav_rules') {

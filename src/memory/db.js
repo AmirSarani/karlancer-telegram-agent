@@ -4,6 +4,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ensureOpportunitySchema } from '../opportunity/store.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -191,6 +192,7 @@ export function openDb(dbPath) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA);
+  ensureOpportunitySchema(db);
   for (const sql of MIGRATIONS) {
     try {
       db.exec(sql);
@@ -274,4 +276,3 @@ export default openDb;
  * Multi-writer architecture is NOT implemented — do not run multiple writers on one DB file.
  */
 export const acquireSingleWorkerConsumerLock = acquireSingleNodeLock;
-

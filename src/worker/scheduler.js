@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { logger } from '../observability/logger.js';
 
 const DEFAULTS = [
+  { name: 'opportunities_scan', capability: 'opportunities.scan', intervalMs: 30 * 60_000, payload: { pages: 1 } },
   { name: 'rooms_scan', capability: 'rooms.scan', intervalMs: 5 * 60_000, payload: { page: 1 } },
   { name: 'messages_poll', capability: 'messages.poll', intervalMs: 2 * 60_000, payload: { page: 1 } },
   { name: 'health_refresh', capability: 'health.ping', intervalMs: 60_000, payload: {} },

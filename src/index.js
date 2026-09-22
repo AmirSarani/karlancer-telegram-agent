@@ -192,6 +192,23 @@ async function main() {
       if (type === 'rooms.scanned' && payload) {
         await notifyScanIfNeeded(payload);
       }
+      
+      if (type === 'opportunities.scanned' && payload && !payload.skipped) {
+        try {
+          const { formatOpportunityScanResult } = await import('./telegram/opportunity-ux.js');
+          const text = formatOpportunityScanResult(payload);
+          if (config.enableTelegram && config.telegramBotToken && config.telegramOwnerChatId != null) {
+            await notifyOwner({
+              token: config.telegramBotToken,
+              chatId: config.telegramOwnerChatId,
+              text,
+            });
+          }
+        } catch (e) {
+          logger.warn('opportunity_scan_notify_failed', { err: e.message });
+        }
+      }
+
       if (type === 'messages.polled' && payload) {
         await notifyRoomCards(payload);
       }
