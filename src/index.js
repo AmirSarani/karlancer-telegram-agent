@@ -9,6 +9,7 @@ import { bumpHandoffMeta } from './memory/handoff.js';
 import { logger } from './observability/logger.js';
 import { buildHealth } from './observability/health.js';
 import { createScheduler } from './worker/scheduler.js';
+import { createMorningDigest } from './opportunity/morning-digest.js';
 import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
 import { notifyOwner, editOwnerMessage } from './telegram/notify.js';
@@ -304,10 +305,35 @@ async function main() {
     });
 
     scheduler.start();
+
+    const morningDigest = createMorningDigest({
+      db,
+      notify: async (text) => {
+        if (!config.telegramBotToken || config.telegramOwnerChatId == null) return;
+        await notifyOwner({
+          token: config.telegramBotToken,
+          chatId: config.telegramOwnerChatId,
+          text,
+        });
+      },
+      auth: {
+        hasAuth: Boolean(api.client.hasAuth),
+        envFile: path.join(config.root, '.env'),
+      },
+      pendingApprovals: () => queue.pendingApprovals().length,
+      isPaused: () => runtime.state === 'paused',
+    });
+    morningDigest.start(60_000);
+
     const shutdown = async (signal) => {
       logger.info('main_shutdown', { signal });
       await worker.stop();
       scheduler.stop();
+      try {
+        morningDigest.stop();
+      } catch {
+        /* ignore */
+      }
       try {
         nodeLock?.release();
       } catch {

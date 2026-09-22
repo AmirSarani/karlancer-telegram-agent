@@ -1,5 +1,8 @@
 # Architecture — Karlancer API-first MCP Agent
 
+See also **[EYES_BRAIN_HANDS.md](./EYES_BRAIN_HANDS.md)** (folder map; MCP = remote control; daily path = Telegram).
+
+
 ```text
 MCP Clients (Cursor / ChatGPT / API-key)
         │  stdio | Streamable HTTP
