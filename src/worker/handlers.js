@@ -205,6 +205,11 @@ export async function handleJob(ctx, job) {
             }
           : null,
       }));
+      const requestedBy = String(job.requestedBy || '');
+      const isManualScan =
+        Boolean(p.manual) ||
+        Boolean(p.forceNotify) ||
+        requestedBy.startsWith('telegram:');
       const summary = {
         page,
         total: pagination?.total ?? list.length,
@@ -223,6 +228,8 @@ export async function handleJob(ctx, job) {
         prepareFailed: 0,
         prepareMode: 'off',
         prepareSkipped: false,
+        scanTrigger: isManualScan ? 'manual' : requestedBy === 'scheduler' ? 'scheduled' : 'auto',
+        forceNotify: isManualScan,
       };
 
       // Brain: auto-prepare drafts → HITL when Assisted/Auto or chat AI pick/full_auto
@@ -319,6 +326,9 @@ export async function handleJob(ctx, job) {
         prepareMode: prep.prepareMode || 'forced',
         prepareSkipped: false,
         analyzedCount: Number(prep.analyzed) || 0,
+        // User tapped «تحلیل همه» — always show result card
+        scanTrigger: 'manual',
+        forceNotify: true,
       };
       try {
         db.prepare(

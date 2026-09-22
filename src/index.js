@@ -20,6 +20,11 @@ import { createPermissionGate } from './telegram/permission-gate.js';
 import { createMutationRequester } from './telegram/mutation-request.js';
 import { maybeNotifySessionExpired } from './telegram/relogin-flow.js';
 import { formatScanSummary, afterScanInlineKeyboard, buildScanResultMessage } from './telegram/ui.js';
+import {
+  shouldNotifyScanSummary,
+  readLastScanNotifyFingerprint,
+  writeLastScanNotifyFingerprint,
+} from './telegram/scan-notify-dedupe.js';
 import { formatRoomCard, roomCardKeyboard, roomPickKeyboard } from './telegram/room-card.js';
 import { createRoomState } from './agent/room-state.js';
 
@@ -110,7 +115,7 @@ async function main() {
     }
   }
 
-  /** One Telegram notify per rooms.scan job (owner-only). */
+  /** One Telegram notify per rooms.scan job (owner-only); auto path fingerprint-deduped. */
   let lastNotifiedScanAt = null;
   /** @type {{ chatId: number, messageId: number, jobId?: string } | null} */
   let pendingScanUi = null;
@@ -121,6 +126,32 @@ async function main() {
     }
     if (!summary?.scannedAt) return;
     if (lastNotifiedScanAt === summary.scannedAt) return;
+
+    const hasPendingUi = pendingScanUi?.messageId != null;
+    const decision = shouldNotifyScanSummary(summary, {
+      lastFingerprint: readLastScanNotifyFingerprint(db),
+      hasPendingUi,
+      forceNotify: Boolean(summary.forceNotify) || summary.scanTrigger === 'manual',
+    });
+
+    if (!decision.notify) {
+      if (decision.persist) {
+        try {
+          writeLastScanNotifyFingerprint(db, decision.fingerprint);
+        } catch (e) {
+          logger.warn('scan_notify_fp_write_failed', { err: e.message });
+        }
+      }
+      logger.info('telegram_scan_notify_skipped', {
+        reason: decision.reason,
+        page: summary.page,
+        unread: summary.unreadOnPage,
+        prepared: summary.preparedCount,
+        trigger: summary.scanTrigger || 'auto',
+      });
+      return;
+    }
+
     lastNotifiedScanAt = summary.scannedAt;
     const built = buildScanResultMessage(summary);
     const text = built.text || formatScanSummary(summary);
@@ -135,7 +166,16 @@ async function main() {
       });
       pendingScanUi = null;
       if (edited.ok) {
-        logger.info('telegram_scan_edited', { page: summary.page, unread: summary.unreadOnPage });
+        try {
+          writeLastScanNotifyFingerprint(db, decision.fingerprint);
+        } catch (e) {
+          logger.warn('scan_notify_fp_write_failed', { err: e.message });
+        }
+        logger.info('telegram_scan_edited', {
+          page: summary.page,
+          unread: summary.unreadOnPage,
+          reason: decision.reason,
+        });
         return;
       }
       logger.warn('telegram_scan_edit_failed', { error: edited.error });
@@ -149,10 +189,17 @@ async function main() {
     if (!res.ok) {
       logger.warn('telegram_scan_notify_failed', { error: res.errors?.[0] });
     } else {
+      try {
+        writeLastScanNotifyFingerprint(db, decision.fingerprint);
+      } catch (e) {
+        logger.warn('scan_notify_fp_write_failed', { err: e.message });
+      }
       logger.info('telegram_scan_notified', {
         page: summary.page,
         unread: summary.unreadOnPage,
         sent: res.sent,
+        reason: decision.reason,
+        trigger: summary.scanTrigger || 'auto',
       });
     }
   }
@@ -167,6 +214,24 @@ async function main() {
     for (const card of cards) {
       const key = `${card.roomId}:${(card.freshInboundIds || []).join(',') || card.updatedAt || ''}`;
       if (notifiedMsgIds.has(key)) continue;
+      const freshN = Number(card.freshInboundCount) || (card.freshInboundIds || []).length || 0;
+      const action = String(card.continuumAction || '');
+      const needsHitl =
+        Boolean(card.pickPrompt) ||
+        ['pick_to_answer', 'auto_hitl', 'hitl_emergency', 'scan_hitl'].includes(action);
+      // Continuum echo with no new inbound → stay quiet (scan-summary spam spirit)
+      if (
+        freshN <= 0 &&
+        !needsHitl &&
+        (action === 'notify' || action === 'notify_only' || action === 'continuum_notify')
+      ) {
+        logger.info('telegram_room_card_skipped', {
+          roomId: card.roomId,
+          reason: 'no_fresh_inbound',
+          action,
+        });
+        continue;
+      }
       notifiedMsgIds.add(key);
       if (notifiedMsgIds.size > 500) {
         const first = notifiedMsgIds.values().next().value;
