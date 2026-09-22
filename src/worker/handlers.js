@@ -7,6 +7,7 @@ import { memoryAppend } from '../memory/store.js';
 import { bidIdempotencyKey } from '../api/contracts/verified-mutation.js';
 import { createRoomState } from '../agent/room-state.js';
 import { runMessagesPoll } from '../agent/messages-poll.js';
+import { createScanPrepare } from '../agent/scan-prepare.js';
 import { createOpportunityScanner } from '../opportunity/scanner.js';
 
 /**
@@ -189,6 +190,21 @@ export async function handleJob(ctx, job) {
           // leave undefined → UX shows conservative label
         }
       }
+      const matchedSlim = matched.slice(0, 10).map((m) => ({
+        roomId: m.roomId,
+        projectId: m.projectId,
+        inviteText: m.inviteText ? String(m.inviteText).slice(0, 160) : null,
+        project: m.project
+          ? {
+              id: m.project.id,
+              title: m.project.title,
+              minBudget: m.project.minBudget ?? m.project.budgetMin,
+              maxBudget: m.project.maxBudget ?? m.project.budgetMax,
+              skills: m.project.skills,
+              category: m.project.category,
+            }
+          : null,
+      }));
       const summary = {
         page,
         total: pagination?.total ?? list.length,
@@ -196,11 +212,53 @@ export async function handleJob(ctx, job) {
         pageCount: list.length,
         unreadOnPage,
         matchedCount: matched.length,
+        matched: matchedSlim,
         priorityRooms,
         softFailCount,
         partial: softFailCount > 0,
         scannedAt,
+        preparedCount: 0,
+        replyApprovals: 0,
+        bidApprovals: 0,
+        prepareFailed: 0,
+        prepareMode: 'off',
+        prepareSkipped: false,
       };
+
+      // Brain: auto-prepare drafts → HITL when Assisted/Auto or chat AI pick/full_auto
+      // (or payload.forcePrepare from «تحلیل همه»). Never live-send from this path.
+      if (priorityRooms.length || matched.length) {
+        try {
+          const preparer = createScanPrepare({
+            db,
+            api,
+            mutations: ctx.mutations || null,
+            llm: ctx.llm || null,
+            queue: ctx.queue || null,
+          });
+          const prep = await preparer.prepareScanHits({
+            priorityRooms,
+            matched,
+            max: p.prepareMax,
+            force: Boolean(p.forcePrepare),
+          });
+          summary.prepareMode = prep.prepareMode || (prep.skipped ? 'manual_offer' : 'auto');
+          summary.prepareSkipped = Boolean(prep.skipped);
+          summary.preparedCount = Number(prep.preparedCount) || 0;
+          summary.replyApprovals = Number(prep.replyApprovals) || 0;
+          summary.bidApprovals = Number(prep.bidApprovals) || 0;
+          summary.prepareFailed = Number(prep.failed) || 0;
+          summary.analyzedCount = Number(prep.analyzed) || 0;
+          if (prep.error) summary.prepareError = prep.error;
+        } catch (e) {
+          logger.warn('rooms_scan_prepare_failed', { err: e.message });
+          summary.prepareFailed = (summary.prepareFailed || 0) + 1;
+          summary.prepareError = e.message;
+        }
+      } else {
+        summary.prepareMode = 'empty';
+      }
+
       // Persist for /status and /start (optional kv)
       try {
         db.prepare(
@@ -212,6 +270,66 @@ export async function handleJob(ctx, job) {
       }
       await emit(ctx, 'rooms.scanned', summary);
       return { ok: true, result: { ...summary, matched } };
+    }
+
+    case 'rooms.prepare_scan': {
+      // One-tap «تحلیل همه» — prepare from last scan summary without re-listing rooms.
+      let last = null;
+      try {
+        const row = db.prepare(`SELECT value FROM kv WHERE key = 'last_scan_summary'`).get();
+        if (row?.value) last = JSON.parse(row.value);
+      } catch (e) {
+        logger.warn('prepare_scan_read_last_failed', { err: e.message });
+      }
+      if (!last?.priorityRooms?.length && !last?.matched?.length) {
+        // matched is not always persisted on summary — rebuild from priority only
+        if (!last?.priorityRooms?.length) {
+          return {
+            ok: true,
+            result: {
+              skipped: true,
+              reason: 'no_last_scan',
+              preparedCount: 0,
+              prepareMode: 'empty',
+            },
+          };
+        }
+      }
+      const preparer = createScanPrepare({
+        db,
+        api,
+        mutations: ctx.mutations || null,
+        llm: ctx.llm || null,
+        queue: ctx.queue || null,
+      });
+      const prep = await preparer.prepareScanHits({
+        priorityRooms: last.priorityRooms || [],
+        matched: last.matched || [],
+        max: p.prepareMax,
+        force: true,
+      });
+      const scannedAt = new Date().toISOString();
+      const summary = {
+        ...last,
+        scannedAt,
+        preparedCount: Number(prep.preparedCount) || 0,
+        replyApprovals: Number(prep.replyApprovals) || 0,
+        bidApprovals: Number(prep.bidApprovals) || 0,
+        prepareFailed: Number(prep.failed) || 0,
+        prepareMode: prep.prepareMode || 'forced',
+        prepareSkipped: false,
+        analyzedCount: Number(prep.analyzed) || 0,
+      };
+      try {
+        db.prepare(
+          `INSERT INTO kv (key, value, updated_at) VALUES ('last_scan_summary', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        ).run(JSON.stringify(summary), scannedAt);
+      } catch (e) {
+        logger.warn('last_scan_kv_failed', { err: e.message });
+      }
+      await emit(ctx, 'rooms.scanned', summary);
+      return { ok: true, result: { ...summary, prepareItems: prep.items } };
     }
 
 

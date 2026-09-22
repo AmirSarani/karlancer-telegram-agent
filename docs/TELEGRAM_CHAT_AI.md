@@ -58,3 +58,17 @@ On new inbound for an answered/active thread: reload context → re-analyze with
 - `src/agent/messages-poll.js` — poll → continuum
 - `src/telegram/room-card.js` — pick keyboard
 - `docs/TELEGRAM_CHAT_AI.md` — this file
+
+## Scan → prepare → HITL
+
+`rooms.scan` no longer stops at a priority list. After listing rooms that need review:
+
+1. Cap top N (default 5, hard max 10)
+2. Reuse Brain (`analyzeRoomWithLlm` + `adaptDraftWithNote` + `cleanHumanReply`) via `src/agent/scan-prepare.js`
+3. Enqueue `messages.send` (and invite `bids.submit` when matched) with **`forceRequireApproval: true`**
+4. Summary copy: «N مورد تحلیل شد → منتظر تأیید شما» + deep link to **تأییدها**
+5. Never live auto-send/bid from scan (`ALLOW_LIVE_AUTO_*` still required elsewhere + gate)
+6. Emergency stop skips prepare; «تحلیل همه» (`rooms.prepare_scan`) retries from last summary
+
+Modules: `src/agent/scan-prepare.js`, `src/worker/handlers.js` (`rooms.scan` / `rooms.prepare_scan`), `src/telegram/scan-ux.js`
+

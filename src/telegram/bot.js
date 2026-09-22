@@ -907,6 +907,46 @@ async function replyMode(ctx, { edit = false } = {}) {
     }
   }
 
+  /** One-tap «تحلیل همه» — enqueue rooms.prepare_scan from last priorities. */
+  async function doPrepareScan(ctx, { edit = false } = {}) {
+    if (!queue) {
+      const { text, keyboard } = formatFriendlyError('صف عملیات وصل نیست.', {
+        retryCallback: 'scan:prepare',
+      });
+      await editOrReply(ctx, text, { reply_markup: keyboard }, { edit });
+      return;
+    }
+    if (runtime.state === 'paused') {
+      await editOrReply(
+        ctx,
+        'ایجنت روی مکث است — اول از تنظیمات «ادامه» را بزنید.',
+        { reply_markup: settingsInlineKeyboard('paused') },
+        { edit }
+      );
+      return;
+    }
+    const job = queue.create({
+      goal: 'rooms.prepare_scan',
+      requestedBy: `telegram:${ctx.from?.id}`,
+      payload: { forcePrepare: true },
+    });
+    const sent = await editOrReply(
+      ctx,
+      [
+        '🤖 در حال تحلیل اولویت‌ها…',
+        '————————',
+        '',
+        'پیش‌نویس پاسخ/پیشنهاد ساخته می‌شود و برای تأیید شما در «تأییدها» می‌آید.',
+        'ارسال زنده انجام نمی‌شود تا خودتان تأیید کنید.',
+      ].join('\n'),
+      { reply_markup: buildScanKeyboard({ loading: true, jobId: job.jobId }) },
+      { edit }
+    );
+    if (sent?.messageId != null) {
+      setPendingScanMessage({ chatId: sent.chatId, messageId: sent.messageId, jobId: job.jobId });
+    }
+  }
+
   async function decide(ctx, approve, approvalIdHint) {
     if (!queue) {
       return { ok: false, text: 'صف عملیات وصل نیست.' };
@@ -1955,6 +1995,11 @@ if (parsed.type === 'set_mode') {
     if (parsed.type === 'scan_refresh') {
       await ctx.answerCallbackQuery({ text: 'اسکن…' });
       await doScan(ctx, { edit: true });
+      return;
+    }
+    if (parsed.type === 'scan_prepare') {
+      await ctx.answerCallbackQuery({ text: 'تحلیل…' });
+      await doPrepareScan(ctx, { edit: true });
       return;
     }
     if (parsed.type === 'scan_chats') {
