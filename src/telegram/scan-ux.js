@@ -94,12 +94,55 @@ export function priorityReasonLabel(room = {}) {
     room.match_reason ||
     null;
   if (explicit && String(explicit).trim()) {
-    return String(explicit).trim().slice(0, 80);
+    const cleaned = String(explicit).trim().slice(0, 80);
+    // Never surface the old vague fallback if stored in data
+    if (/^در فهرست اولویت/.test(cleaned)) return 'از نتیجه اسکن';
+    return cleaned;
   }
   if (Number(room.unread) > 0) return 'پیام جدید';
   if (room.keywordMatched || room.matched) return 'تطابق کلیدواژه';
   if (room.related || room.isRelated) return 'مرتبط با کار شما';
-  return 'در فهرست اولویت‌ها';
+  return 'از نتیجه اسکن';
+}
+
+/** Weak / non-actionable reason — omit from mini-cards rather than repeat noise. */
+export function isWeakPriorityReason(label) {
+  const t = String(label || '').trim();
+  if (!t) return true;
+  return /^(از نتیجه اسکن|در فهرست اولویت‌ها|در فهرست اولویت)$/.test(t);
+}
+
+/**
+ * Honest signal rank for display sort only — not a score shown to the user.
+ * Stronger: unread / keyword / related before vague «in list» items.
+ * @param {object} room
+ */
+export function prioritySignalRank(room = {}) {
+  let rank = 0;
+  if (Number(room.unread) > 0) rank += 40;
+  if (room.keywordMatched || room.matched) rank += 30;
+  const reason = String(
+    room.reason || room.priorityReason || room.priority_reason || room.matchReason || ''
+  );
+  if (/کلیدواژه|keyword/i.test(reason)) rank += 20;
+  if (/پیام جدید|خوانده.?نشده|unread/i.test(reason)) rank += 15;
+  if (/فوری|مهم|urgent/i.test(reason)) rank += 10;
+  if (room.related || room.isRelated) rank += 5;
+  return rank;
+}
+
+/** @param {object[]} rooms */
+export function sortPriorityRooms(rooms = []) {
+  return [...rooms].sort((a, b) => {
+    const d = prioritySignalRank(b) - prioritySignalRank(a);
+    if (d !== 0) return d;
+    const au = Number(a.unread) || 0;
+    const bu = Number(b.unread) || 0;
+    if (bu !== au) return bu - au;
+    const at = Date.parse(a.updatedAt || a.updated_at || '') || 0;
+    const bt = Date.parse(b.updatedAt || b.updated_at || '') || 0;
+    return bt - at;
+  });
 }
 
 /**
@@ -251,7 +294,7 @@ export function formatScanSummary(s = {}) {
   }
 
   const showMax = SUMMARY_PRIORITY_MAX;
-  const show = rooms.slice(0, showMax);
+  const show = sortPriorityRooms(rooms).slice(0, showMax);
   if (show.length) {
     lines.push('', '🔥 اولویت‌ها');
     for (let i = 0; i < show.length; i++) {
@@ -261,7 +304,7 @@ export function formatScanSummary(s = {}) {
       lines.push(`${toFaNum(i + 1)}) ${guestName(r)}`);
       const previewLine = formatPreviewLine(preview);
       if (previewLine) lines.push(previewLine);
-      lines.push(`   ℹ️ ${reason}`);
+      if (!isWeakPriorityReason(reason)) lines.push(`   ℹ️ ${reason}`);
     }
     if (rooms.length > showMax) {
       const more = rooms.length - showMax;
@@ -301,7 +344,7 @@ export function formatScanDetails(s = {}) {
 }
 
 export function formatScanPriorityList(s = {}, { page = 1 } = {}) {
-  const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms : [];
+  const rooms = sortPriorityRooms(Array.isArray(s.priorityRooms) ? s.priorityRooms : []);
   if (!rooms.length) {
     return [
       '🔥 مهم‌ها / اولویت‌ها',
@@ -319,25 +362,28 @@ export function formatScanPriorityList(s = {}, { page = 1 } = {}) {
     '🔥 مهم‌ها / اولویت‌ها',
     '————————',
     '',
-    `تعداد: ${toFaNum(rooms.length)} · صفحه ${toFaNum(safePage)}/${toFaNum(totalPages)}`,
-    '',
+    `${toFaNum(rooms.length)} گفتگو برای بررسی`,
   ];
+  if (totalPages > 1) {
+    lines.push(`صفحه ${toFaNum(safePage)} از ${toFaNum(totalPages)}`);
+  }
+  lines.push('');
   for (let i = 0; i < slice.length; i++) {
     const r = slice[i];
-    const badge = priorityBadge(r);
     const preview = roomPreview(r);
-    lines.push(`${toFaNum(start + i + 1)}. ${badge.line} · ${guestName(r)}`);
+    const reason = priorityReasonLabel(r);
+    lines.push(`${toFaNum(start + i + 1)}) ${guestName(r)}`);
     const previewLine = formatPreviewLine(preview);
     if (previewLine) lines.push(previewLine);
-    lines.push(`   ℹ️ ${priorityReasonLabel(r)}`);
+    if (!isWeakPriorityReason(reason)) lines.push(`   ℹ️ ${reason}`);
   }
-  lines.push('', 'برای باز کردن، دکمه گفتگو را بزنید.');
+  lines.push('', 'دکمه گفتگو را بزنید.');
   return lines.join('\n');
 }
 
 export function formatScanUnreadList(s = {}) {
-  const rooms = (Array.isArray(s.priorityRooms) ? s.priorityRooms : []).filter(
-    (r) => Number(r.unread) > 0
+  const rooms = sortPriorityRooms(
+    (Array.isArray(s.priorityRooms) ? s.priorityRooms : []).filter((r) => Number(r.unread) > 0)
   );
   const unreadCount = Number(s.unreadOnPage) || rooms.length;
   if (!rooms.length && unreadCount === 0) {
@@ -352,20 +398,23 @@ export function formatScanUnreadList(s = {}) {
     '🔔 خوانده‌نشده‌ها',
     '————————',
     '',
-    `تعداد در صفحه اسکن: ${toFaNum(unreadCount)}`,
+    `${toFaNum(unreadCount)} گفتگو با پیام جدید`,
     '',
   ];
   const show = rooms.slice(0, PRIORITY_PAGE_SIZE);
   for (let i = 0; i < show.length; i++) {
     const r = show[i];
     const preview = roomPreview(r);
-    lines.push(`${toFaNum(i + 1)}. 🔥 مهم · ${guestName(r)} · ${toFaNum(r.unread)}`);
+    const n = Number(r.unread) || 0;
+    const unreadBit = n > 0 ? ` · ${toFaNum(n)} پیام` : '';
+    lines.push(`${toFaNum(i + 1)}) ${guestName(r)}${unreadBit}`);
     const previewLine = formatPreviewLine(preview);
     if (previewLine) lines.push(previewLine);
   }
   if (!show.length && unreadCount > 0) {
     lines.push('جزئیات نام در اولویت‌ها نیست — از «مهم‌ها» ببینید.');
   }
+  lines.push('', 'دکمه گفتگو را بزنید.');
   return lines.join('\n');
 }
 
@@ -487,7 +536,7 @@ export function buildScanDetailsKeyboard(s = {}) {
 }
 
 export function buildScanPriorityKeyboard(s = {}, { page = 1 } = {}) {
-  const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms : [];
+  const rooms = sortPriorityRooms(Array.isArray(s.priorityRooms) ? s.priorityRooms : []);
   const totalPages = Math.max(1, Math.ceil(Math.max(rooms.length, 1) / PRIORITY_PAGE_SIZE));
   const safePage = Math.min(Math.max(1, page), totalPages);
   const start = (safePage - 1) * PRIORITY_PAGE_SIZE;
@@ -519,9 +568,9 @@ export function buildScanPriorityKeyboard(s = {}, { page = 1 } = {}) {
 }
 
 export function buildScanUnreadKeyboard(s = {}) {
-  const rooms = (Array.isArray(s.priorityRooms) ? s.priorityRooms : [])
-    .filter((r) => Number(r.unread) > 0)
-    .slice(0, PRIORITY_PAGE_SIZE);
+  const rooms = sortPriorityRooms(
+    (Array.isArray(s.priorityRooms) ? s.priorityRooms : []).filter((r) => Number(r.unread) > 0)
+  ).slice(0, PRIORITY_PAGE_SIZE);
   const kb = new InlineKeyboard();
   for (let i = 0; i < rooms.length; i += 2) {
     const a = rooms[i];
@@ -612,6 +661,9 @@ export default {
   truncatePersianText,
   formatRelativeTime,
   priorityReasonLabel,
+  isWeakPriorityReason,
+  prioritySignalRank,
+  sortPriorityRooms,
   priorityBadge,
   deriveScanState,
   formatScanSummary,

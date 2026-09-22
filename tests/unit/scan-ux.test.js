@@ -6,6 +6,9 @@ import {
   truncatePersianText,
   formatRelativeTime,
   priorityReasonLabel,
+  isWeakPriorityReason,
+  prioritySignalRank,
+  sortPriorityRooms,
   priorityBadge,
   deriveScanState,
   formatScanSummary,
@@ -140,7 +143,10 @@ test('H: partial success warns without dropping available results', () => {
 test('I: priority reason uses real reason or conservative label', () => {
   assert.equal(priorityReasonLabel({ reason: 'تطابق کلیدواژه' }), 'تطابق کلیدواژه');
   assert.equal(priorityReasonLabel({ unread: 1 }), 'پیام جدید');
-  assert.match(priorityReasonLabel({}), /اولویت|بررسی|انتخاب/);
+  assert.equal(priorityReasonLabel({}), 'از نتیجه اسکن');
+  assert.equal(priorityReasonLabel({ reason: 'در فهرست اولویت‌ها' }), 'از نتیجه اسکن');
+  assert.equal(isWeakPriorityReason('از نتیجه اسکن'), true);
+  assert.equal(isWeakPriorityReason('تطابق کلیدواژه'), false);
   assert.match(priorityBadge({ unread: 1 }).line, /🔥/);
   assert.match(priorityBadge({ matched: true }).line, /🟡|🔥/);
   assert.match(priorityBadge({}).line, /🔵/);
@@ -170,7 +176,7 @@ test('K: afterScanInlineKeyboard aliases buildScanKeyboard', () => {
 test('L: priority/unread/room progressive disclosure', () => {
   assert.match(formatScanPriorityList(samplePriority), /اولویت|مهم/);
   assert.doesNotMatch(formatScanPriorityList(samplePriority), /⚪/);
-  assert.match(formatScanUnreadList(samplePriority), /خوانده/);
+  assert.match(formatScanUnreadList(samplePriority), /خوانده|پیام جدید/);
   const card = formatScanRoomCard(samplePriority.priorityRooms[0], { showDetails: false });
   assert.doesNotMatch(card, /7241431/);
   const withId = formatScanRoomCard(samplePriority.priorityRooms[0], { showDetails: true });
@@ -232,6 +238,75 @@ test('O: summary hierarchy matches needsReview and points to مشاهده همه
   });
   const labels = kb.inline_keyboard.flat().map((b) => b.text).join(' ');
   assert.match(labels, /مشاهده همه/);
+});
+
+test('P: priority list mini-cards — clear header, no badge noise, honest reasons', () => {
+  const rooms = [
+    { guest_name: 'Vague.One', roomId: '9', unread: 0, last_message: 'سلام' },
+    {
+      guest_name: 'Mohammad.S',
+      roomId: '1',
+      unread: 0,
+      last_message: 'xss-bypass.png',
+      reason: 'تطابق کلیدواژه',
+      keywordMatched: true,
+    },
+    {
+      guest_name: 'Ardeshir.A',
+      roomId: '2',
+      unread: 1,
+      last_message: '««لطفا ایمیل را استخراج کنید»»',
+      reason: 'پیام جدید',
+    },
+    {
+      guest_name: 'Maryam.S',
+      roomId: '3',
+      unread: 0,
+      last_message: 'پیشنهاد بر روی پروژه «رفع اشکال برنامه object dete',
+    },
+    { guest_name: 'Other', roomId: '4', unread: 0, last_message: 'hi', reason: 'در فهرست اولویت‌ها' },
+  ];
+  const text = formatScanPriorityList({ priorityRooms: rooms }, { page: 1 });
+  assert.match(text, /۵ گفتگو برای بررسی/);
+  assert.doesNotMatch(text, /تعداد:|صفحه ۱\/۱|صفحه ۱ از ۱/);
+  assert.doesNotMatch(text, /اطلاعاتی|🔵|🟡/);
+  assert.doesNotMatch(text, /در فهرست اولویت/);
+  assert.doesNotMatch(text, /««|»»/);
+  assert.match(text, /📎 xss-bypass\.png/);
+  assert.match(text, /تطابق کلیدواژه/);
+  assert.match(text, /پیام جدید/);
+  assert.match(text, /دکمه گفتگو را بزنید/);
+  // stronger signals first: unread / keyword before vague
+  const idxArd = text.indexOf('Ardeshir.A');
+  const idxMoh = text.indexOf('Mohammad.S');
+  const idxVague = text.indexOf('Vague.One');
+  assert.ok(idxArd >= 0 && idxMoh >= 0 && idxVague >= 0);
+  assert.ok(idxArd < idxVague, 'unread before vague');
+  assert.ok(idxMoh < idxVague, 'keyword before vague');
+  // weak reason omitted on Vague.One / Other cards
+  const vagueBlock = text.slice(idxVague, idxVague + 80);
+  assert.doesNotMatch(vagueBlock, /ℹ️/);
+  // keyboard order matches sorted list; callbacks unchanged
+  const kb = buildScanPriorityKeyboard({ priorityRooms: rooms }, { page: 1 });
+  for (const row of kb.inline_keyboard) assert.ok(row.length <= 2);
+  const cbs = kb.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(cbs.includes('room:open:2'));
+  assert.ok(cbs.includes('scan:back'));
+  assert.ok(cbs.includes('nav:home'));
+  // sort helper itself
+  const sorted = sortPriorityRooms(rooms);
+  assert.equal(sorted[0].guest_name, 'Ardeshir.A');
+  assert.ok(prioritySignalRank(sorted[0]) > prioritySignalRank(sorted[sorted.length - 1]));
+  // pagination line only when pages > 1
+  const many = Array.from({ length: 7 }, (_, i) => ({
+    guest_name: `U${i}`,
+    roomId: String(i),
+    unread: 0,
+    last_message: 'x',
+  }));
+  const paged = formatScanPriorityList({ priorityRooms: many }, { page: 2 });
+  assert.match(paged, /صفحه ۲ از ۲/);
+  assert.match(paged, /۷ گفتگو برای بررسی/);
 });
 
 test('relative time uses Persian digits', () => {
