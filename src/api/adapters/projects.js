@@ -29,6 +29,34 @@ export function createProjectsAdapter(client) {
       const detail = await this.getBySlug(resolvedSlug);
       return { projectId: String(projectId), ...detail };
     },
+    async search(params = {}) {
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries(params)) {
+        if (v === undefined || v === null || v === '') continue;
+        qs.set(k, String(v));
+      }
+      const q = qs.toString();
+      const res = await client.get(`/api/publics/search/projects${q ? `?${q}` : ''}`, { auth: false });
+      const root = res.data?.data ?? res.data ?? {};
+      const list = Array.isArray(root.data) ? root.data : Array.isArray(root) ? root : [];
+      return {
+        projects: list.map(normalizeProject).filter(Boolean),
+        pagination: {
+          currentPage: root.current_page ?? null,
+          lastPage: root.last_page ?? null,
+          perPage: root.per_page ?? null,
+          total: root.total ?? list.length,
+        },
+        raw: res.data,
+      };
+    },
+
+    async suggest(projectId) {
+      const res = await client.get(`/api/publics/suggest/project/${projectId}`, { auth: false });
+      const data = res.data?.data ?? res.data ?? {};
+      const list = Array.isArray(data) ? data : Array.isArray(data.data) ? data.data : [];
+      return { projectId: String(projectId), suggestions: list.map(normalizeProject).filter(Boolean), raw: res.data };
+    },
   };
 }
 

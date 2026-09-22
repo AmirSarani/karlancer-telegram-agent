@@ -33,3 +33,7 @@ state/MSG_SHAPE_*.json
 state/PROJECT_SAMPLE.json
 state/ROOM_*_MESSAGES.json
 state/*.local.json
+
+# Private HAR captures (never commit)
+_har_private/
+*.har

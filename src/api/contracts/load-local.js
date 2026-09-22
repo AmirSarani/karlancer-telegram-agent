@@ -14,6 +14,7 @@ import {
   registerVerifiedMutation,
   BidPayloadSchema,
   MessagePayloadSchema,
+  NotificationsReadPayloadSchema,
   ALLOWED_MUTATION_CAPABILITIES,
 } from './verified-mutation.js';
 import { logger } from '../../observability/logger.js';
@@ -21,6 +22,7 @@ import { logger } from '../../observability/logger.js';
 const schemas = {
   bid: BidPayloadSchema,
   message: MessagePayloadSchema,
+  notifications_read: NotificationsReadPayloadSchema,
 };
 
 export function loadLocalVerifiedMutations(env = process.env) {

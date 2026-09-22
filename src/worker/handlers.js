@@ -349,7 +349,7 @@ export async function handleJob(ctx, job) {
         }
       }
       const operationId = job.operationId || p.operationId || crypto.randomUUID();
-      const data = await api.messages.send(p.roomId, p.text, { operationId });
+      const data = await api.messages.send(p.roomId, p.text, { operationId, receptorId: p.receptorId });
       if (!data.ok) {
         ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
           errorCode: data.status || 'blocked_by_missing_api',

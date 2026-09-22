@@ -2,15 +2,24 @@
 
 Base: `https://www.karlancer.com`
 
+See **[KARLANCER_API_MAP.md](./KARLANCER_API_MAP.md)** for the HAR-backed full map.
+
 | Method | Path | Auth | Status |
 |--------|------|------|--------|
-| GET | `/api/rooms/?page=` | Bearer | confirmed (extension) |
+| GET | `/api/rooms/?page=` | Bearer | confirmed |
+| GET | `/api/rooms/archive?page=` | Bearer | HAR |
 | GET | `/api/rooms/{id}/messages-pg?page=` | Bearer | confirmed |
-| GET | `/api/check-bid?projectIds[0]=` | Bearer | confirmed |
-| GET | `/api/publics/projects/{id}` | public | confirmed |
-| GET | `/api/publics/projects/{slug}` | public | confirmed |
-| POST | `/api/bids` (+ variants) | Bearer | **unverified** try-list |
-| POST | `/api/rooms/{id}/messages` (+ variants) | Bearer | **unverified** try-list |
-| GET | `/api/user` (+ variants) | Bearer | try-list |
+| POST | `/api/messages` | Bearer | HAR 201 (contract gated) |
+| GET | `/api/check-bid?projectIds[i]=` | Bearer | confirmed |
+| POST | `/api/bids` | Bearer | HAR 201 (contract gated) |
+| GET | `/api/dashboard` | Bearer | HAR |
+| GET | `/api/notifications/` | Bearer | HAR |
+| POST | `/api/notifications/read` | Bearer | HAR (contract gated) |
+| GET | `/api/bookmarks/project/ids` | Bearer | HAR |
+| GET | `/api/bookmarks/freelancer/ids` | Bearer | HAR |
+| GET | `/api/plans` | Bearer | HAR |
+| GET | `/api/publics/projects/{id\|slug}` | public | confirmed |
+| GET | `/api/publics/search/projects` | public | HAR |
+| GET | `/api/publics/suggest/project/{id}` | public | HAR |
 
-Auth header: `Authorization: Bearer <access_token>` from `localStorage.auth-token`.
+Auth: `Authorization: Bearer <access_token>` from env (HAR export stripped header values).

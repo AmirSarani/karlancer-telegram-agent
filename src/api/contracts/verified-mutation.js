@@ -27,6 +27,7 @@ export const ALLOWED_MUTATION_CAPABILITIES = new Set([
   'bids.submit',
   'messages.send',
   'messages.mark_seen',
+  'notifications.mark_read',
 ]);
 
 export const ALLOWED_MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH']);
@@ -264,14 +265,45 @@ function opsafe(id) {
 /** Empty schema helpers for future registration after HAR capture */
 export const BidPayloadSchema = z.object({
   project_id: z.union([z.string(), z.number()]),
-  bid_price: z.number().positive(),
-  bid_duration: z.number().int().positive(),
-  bid_description: z.string().min(1),
+  bid_id: z.union([z.number(), z.null()]).optional(),
+  is_pin: z.boolean().optional().default(false),
+  is_highlight: z.boolean().optional().default(false),
+  is_multi: z.boolean().optional().default(false),
+  description: z.string().min(1),
+  edit_cart_id: z.union([z.number(), z.null()]).optional(),
+  milestones: z
+    .array(
+      z.object({
+        description: z.string(),
+        duration: z.union([z.string(), z.number()]),
+        budget: z.union([z.string(), z.number()]),
+      })
+    )
+    .min(1),
 });
 
 export const MessagePayloadSchema = z.object({
+  receptor_id: z.union([z.string(), z.number()]),
+  room_id: z.union([z.string(), z.number()]),
   message: z.string().min(1),
+  file: z
+    .union([
+      z.string(),
+      z.object({
+        name: z.string().optional(),
+        url: z.string().optional(),
+        size: z.number().optional(),
+        type: z.string().optional(),
+      }),
+    ])
+    .optional()
+    .default(''),
 });
+
+export const NotificationsReadPayloadSchema = z.object({
+  notifications: z.array(z.string()).min(1),
+});
+
 
 /**
  * NOTE: No contracts are pre-registered.

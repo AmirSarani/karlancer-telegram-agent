@@ -46,7 +46,14 @@ function hangingPostFetch(postCounter) {
         }
       });
     }
-    return { ok: true, status: 200, text: async () => JSON.stringify({ data: { has_submitted_bid: {} } }), headers: new Map() };
+    return { ok: true, status: 200, text: async () => JSON.stringify({
+        status: 'success',
+        data: {
+          has_submitted_bid: {},
+          room: { id: 1, user_id: 42, guest_name: 't' },
+          messages: { current_page: 1, last_page: 1, per_page: 20, total: 0, data: [] },
+        },
+      }), headers: new Map() };
   };
 }
 
@@ -98,7 +105,7 @@ test('message mutation timeout → no second POST', async () => {
     id: 'msg-t',
     capability: 'messages.send',
     method: 'POST',
-    pathTemplate: '/api/rooms/{roomId}/messages',
+    pathTemplate: '/api/messages',
     payloadSchema: MessagePayloadSchema,
     expectedStatus: [200],
     responseSchema: z.any(),
@@ -118,7 +125,7 @@ test('message mutation timeout → no second POST', async () => {
   const job = queue.create({
     goal: 'messages.send',
     requiresApproval: true,
-    payload: { roomId: 1, text: 'salam' },
+    payload: { roomId: 1, text: 'salam', receptorId: 42 },
   });
   queue.decideApproval(queue.pendingApprovals()[0].approval_id, { approve: true, decidedBy: 't' });
   const claimed = queue.claim('w1');

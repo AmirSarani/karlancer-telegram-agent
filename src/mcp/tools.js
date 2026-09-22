@@ -609,4 +609,258 @@ export function registerTools(server, ctx) {
       return textResult(row);
     })
   );
+  // --- HAR-expanded read tools (capability-oriented; aliases kept above) ---
+
+  server.registerTool(
+    'conversations.list',
+    {
+      description: 'Alias of rooms.list — list Karlancer conversations (authenticated). Read-only.',
+      inputSchema: { page: z.number().int().min(1).optional() },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'conversations.list', permission: 'read' }, async ({ page }) => {
+      try {
+        const data = await api.rooms.list({ page: page || 1 });
+        return textResult({
+          page: data.page,
+          count: data.rooms.length,
+          pagination: data.pagination,
+          conversations: data.rooms.map(({ raw, ...r }) => r),
+        });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'conversations.list_archived',
+    {
+      description: 'List archived Karlancer conversations (HAR GET /api/rooms/archive). Read-only.',
+      inputSchema: { page: z.number().int().min(1).optional() },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'conversations.list_archived', permission: 'read' }, async ({ page }) => {
+      try {
+        const data = await api.rooms.listArchived({ page: page || 1 });
+        return textResult({
+          page: data.page,
+          count: data.rooms.length,
+          pagination: data.pagination,
+          conversations: data.rooms.map(({ raw, ...r }) => r),
+        });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'conversations.messages',
+    {
+      description: 'Alias of room.messages — list messages in a conversation. Read-only.',
+      inputSchema: {
+        roomId: z.union([z.string(), z.number()]),
+        page: z.number().int().min(1).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'conversations.messages', permission: 'read' }, async ({ roomId, page }) => {
+      try {
+        const data = await api.messages.list(roomId, { page: page || 1 });
+        return textResult({
+          roomId: data.roomId,
+          page: data.page,
+          count: data.messages.length,
+          pagination: data.pagination,
+          roomMeta: data.roomMeta,
+          messages: data.messages,
+        });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'projects.search',
+    {
+      description: 'Search public Karlancer projects (HAR GET /api/publics/search/projects). Read-only.',
+      inputSchema: {
+        order: z.string().optional(),
+        mySkills: z.boolean().optional(),
+        isUrgent: z.boolean().optional(),
+        lowCompetition: z.boolean().optional(),
+        loggedIn: z.boolean().optional(),
+        page: z.number().int().min(1).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'projects.search', permission: 'read' }, async (args) => {
+      try {
+        const data = await api.projects.search({
+          order: args.order,
+          my_skills: args.mySkills ? 1 : undefined,
+          is_urgent: args.isUrgent ? 1 : undefined,
+          low_competition: args.lowCompetition ? 1 : undefined,
+          logged_in: args.loggedIn ? 1 : undefined,
+          page: args.page,
+        });
+        return textResult({
+          count: data.projects.length,
+          pagination: data.pagination,
+          projects: data.projects.map(({ raw, ...p }) => p),
+        });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'projects.suggest',
+    {
+      description: 'Suggested projects related to a project id (HAR). Read-only.',
+      inputSchema: { projectId: z.union([z.string(), z.number()]) },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'projects.suggest', permission: 'read' }, async ({ projectId }) => {
+      try {
+        const data = await api.projects.suggest(projectId);
+        return textResult({
+          projectId: data.projectId,
+          count: data.suggestions.length,
+          suggestions: data.suggestions.map(({ raw, ...p }) => p),
+        });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'notifications.list',
+    {
+      description: 'List Karlancer notifications (HAR GET /api/notifications/). Read-only.',
+      inputSchema: { page: z.number().int().min(1).optional() },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'notifications.list', permission: 'read' }, async ({ page }) => {
+      try {
+        const data = await api.notifications.list({ page: page || 1 });
+        return textResult({
+          page: data.page,
+          count: data.notifications.length,
+          pagination: data.pagination,
+          notifications: data.notifications.map(({ raw, ...n }) => n),
+        });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'user.profile',
+    {
+      description: 'Current Karlancer profile/dashboard summary (HAR GET /api/dashboard). Read-only.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'user.profile', permission: 'read' }, async () => {
+      try {
+        const data = await api.user.me();
+        const { raw, ...safe } = data;
+        return textResult(safe);
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'dashboard.get',
+    {
+      description: 'Karlancer dashboard snapshot (wallet/stats). Read-only.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'dashboard.get', permission: 'read' }, async () => {
+      try {
+        const data = await api.user.dashboard();
+        const { raw, ...safe } = data;
+        return textResult(safe);
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'bookmarks.projects',
+    {
+      description: 'Bookmarked project ids (HAR). Read-only.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'bookmarks.projects', permission: 'read' }, async () => {
+      try {
+        const data = await api.bookmarks.projectIds();
+        return textResult({ ids: data.ids, count: data.ids.length });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'bookmarks.freelancers',
+    {
+      description: 'Bookmarked freelancer ids (HAR). Read-only.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'bookmarks.freelancers', permission: 'read' }, async () => {
+      try {
+        const data = await api.bookmarks.freelancerIds();
+        return textResult({ ids: data.ids, count: data.ids.length });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'plans.list',
+    {
+      description: 'List Karlancer plans for the authenticated user (HAR GET /api/plans). Read-only.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'plans.list', permission: 'read' }, async () => {
+      try {
+        const data = await api.plans.list();
+        return textResult({ count: data.plans.length, plans: data.plans });
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
+  server.registerTool(
+    'files.seo_meta',
+    {
+      description: 'Safe metadata for a public SEO content filename (no private URLs). Read-only.',
+      inputSchema: { name: z.string().min(1) },
+      annotations: { readOnlyHint: true },
+    },
+    guard({ name: 'files.seo_meta', permission: 'read' }, async ({ name }) => {
+      try {
+        return textResult(await api.files.publicSeoMeta(name));
+      } catch (e) {
+        return errResult(e.code || 'error', e.message);
+      }
+    })
+  );
+
 }

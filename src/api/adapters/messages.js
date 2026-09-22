@@ -131,7 +131,7 @@ export function createMessagesAdapter(client) {
      * Send message — ONLY via VerifiedMutationContract.
      * Until evidence: NO POST.
      */
-    async send(roomId, text, { operationId } = {}) {
+    async send(roomId, text, { operationId, receptorId } = {}) {
       if (!roomId) throw new KarlancerApiError('invalid_input', 'roomId required');
       if (!text || !String(text).trim()) throw new KarlancerApiError('invalid_input', 'text required');
 
@@ -157,10 +157,42 @@ export function createMessagesAdapter(client) {
         };
       }
 
+      // HAR-confirmed POST /api/messages requires receptor_id.
+      let resolvedReceptorId = receptorId;
+      if (resolvedReceptorId == null) {
+        try {
+          const listed = await this.list(roomId, { page: 1 });
+          resolvedReceptorId =
+            listed?.roomMeta?.userId ||
+            listed?.roomMeta?.raw?.user_id ||
+            listed?.messages?.find((m) => m.userId && m.isOwn === false)?.userId ||
+            null;
+        } catch {
+          resolvedReceptorId = null;
+        }
+      }
+      if (resolvedReceptorId == null) {
+        return {
+          ok: false,
+          status: 'blocked_by_missing_api',
+          reason: 'receptor_id_required_for_messages_send',
+          posted: false,
+          operationId: opId,
+          roomId: String(roomId),
+          hint: 'Pass receptorId (guest user id) or open the room once so roomMeta.userId is known',
+        };
+      }
+      receptorId = resolvedReceptorId;
+
       return executeVerifiedMutation(client, 'messages.send', {
         operationId: opId,
         pathParams: { roomId },
-        payload: { message: String(text) },
+        payload: {
+          receptor_id: Number(receptorId) || receptorId,
+          room_id: Number(roomId) || roomId,
+          message: String(text),
+          file: '',
+        },
       });
     },
 

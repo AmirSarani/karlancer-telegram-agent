@@ -64,9 +64,19 @@ export function createBidsAdapter(client) {
         pathParams: { projectId },
         payload: {
           project_id: Number(projectId) || projectId,
-          bid_price: p,
-          bid_duration: d,
-          bid_description: String(proposalText),
+          bid_id: null,
+          is_pin: false,
+          is_highlight: false,
+          is_multi: false,
+          description: String(proposalText),
+          edit_cart_id: null,
+          milestones: [
+            {
+              description: '',
+              duration: String(d),
+              budget: String(p),
+            },
+          ],
         },
       });
     },

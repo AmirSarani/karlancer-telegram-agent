@@ -1,0 +1,62 @@
+{
+  "status": "success",
+  "data": {
+    "alerts": [],
+    "cart_count": 0,
+    "notifications": {
+      "unread_message": 380,
+      "unread_message_archived": 0,
+      "unread_message_hidden": 0,
+      "unread_notification": 412,
+      "data": [
+        {
+          "id": "6ab2258c29a6b340270816ac",
+          "url": "/projects/راه-اندازی-سایت-وردپرسی-کتاب-1e82rewo583w",
+          "projects": null,
+          "priority": 52,
+          "read": 0,
+          "description": " پروژه ای مطابق با توانایی شما با عنوان «راه اندازی سایت وردپرسی کتاب» ثبت گردید. بر روی آن پیشنهاد دهید.",
+          "ticket_submit": null,
+          "button_text": null,
+          "ignore_click": false,
+          "ticket_id": null,
+          "created_at": "2026-09-22T06:51:53.000000Z",
+          "disable_button": false
+        },
+        {
+          "id": "6ab22501c96fcd2c930ed545",
+          "url": "/projects/راه-اندازی-سایت-مشاوره-حقوقی-74852wo05623",
+          "projects": null,
+          "priority": 52,
+          "read": 0,
+          "description": " پروژه ای مطابق با توانایی شما با عنوان «راه اندازی سایت مشاوره حقوقی» ثبت گردید. بر روی آن پیشنهاد دهید.",
+          "ticket_submit": null,
+          "button_text": null,
+          "ignore_click": false,
+          "ticket_id": null,
+          "created_at": "2026-09-22T06:49:35.000000Z",
+          "disable_button": false
+        },
+        {
+          "id": "6ab2220e29a6b3402707de78",
+          "url": "/projects/بازطراحی-بهینه-سازی-وبسایت-شرکتی-مطابق-شرح-کار-2564e047e8n0",
+          "projects": null,
+          "priority": 52,
+          "read": 0,
+          "description": " پروژه ای مطابق با توانایی شما با عنوان «بازطراحی و بهینه سازی وبسایت شرکتی مطابق شرح کار» ثبت گردید. بر روی آن پیشنهاد دهید.",
+          "ticket_submit": null,
+          "button_text": null,
+          "ignore_click": false,
+          "ticket_id": null,
+          "created_at": "2026-09-22T06:36:59.000000Z",
+          "disable_button": false
+        }
+      ]
+    },
+    "workdiary": {
+      "project": 0,
+      "service": 0
+    }
+  },
+  "error": null
+}

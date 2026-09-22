@@ -4,6 +4,11 @@ import { createMessagesAdapter } from './messages.js';
 import { createProjectsAdapter } from './projects.js';
 import { createBidsAdapter } from './bids.js';
 import { createUserAdapter } from './user.js';
+import { createNotificationsAdapter } from './notifications.js';
+import { createBookmarksAdapter } from './bookmarks.js';
+import { createSearchAdapter } from './search.js';
+import { createFilesAdapter } from './files.js';
+import { createPlansAdapter } from './plans.js';
 import { loadLocalVerifiedMutations } from '../contracts/load-local.js';
 
 /**
@@ -19,6 +24,11 @@ export function createKarlancerApi(opts = {}) {
     projects: createProjectsAdapter(client),
     bids: createBidsAdapter(client),
     user: createUserAdapter(client),
+    notifications: createNotificationsAdapter(client),
+    bookmarks: createBookmarksAdapter(client),
+    search: createSearchAdapter(client),
+    files: createFilesAdapter(client),
+    plans: createPlansAdapter(client),
   };
 }
 

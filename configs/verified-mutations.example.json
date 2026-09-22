@@ -1,0 +1,40 @@
+{
+  "_readme": [
+    "Copy to configs/verified-mutations.local.json (gitignored) only after YOU confirm Bearer auth still works for these POSTs.",
+    "Chrome HAR exports in this mission STRIPPED Authorization/Cookie headers — method/URL/body/response are evidenced, auth headers are NOT.",
+    "Until auth header evidence is re-captured, keep mutations disabled (do not copy this file).",
+    "payloadSchema values must be: bid | message | notifications_read"
+  ],
+  "contracts": [
+    {
+      "id": "har-bids-submit-v1",
+      "capability": "bids.submit",
+      "method": "POST",
+      "pathTemplate": "/api/bids",
+      "expectedStatus": [201],
+      "contractVersion": "har-2026-09-22-v1",
+      "evidence": "HAR sha256 3cf00cd2… (har1) POST /api/bids → 201; body milestones[]; auth headers stripped by Chrome export",
+      "payloadSchema": "bid"
+    },
+    {
+      "id": "har-messages-send-v1",
+      "capability": "messages.send",
+      "method": "POST",
+      "pathTemplate": "/api/messages",
+      "expectedStatus": [201],
+      "contractVersion": "har-2026-09-22-v1",
+      "evidence": "HAR sha256 3cf00cd2… (har1) POST /api/messages → 201; body receptor_id+room_id+message+file; auth headers stripped by Chrome export",
+      "payloadSchema": "message"
+    },
+    {
+      "id": "har-notifications-read-v1",
+      "capability": "notifications.mark_read",
+      "method": "POST",
+      "pathTemplate": "/api/notifications/read",
+      "expectedStatus": [200],
+      "contractVersion": "har-2026-09-22-v1",
+      "evidence": "HAR sha256 3cf00cd2… (har1) POST /api/notifications/read → 200; body {notifications: string[]}; auth headers stripped",
+      "payloadSchema": "notifications_read"
+    }
+  ]
+}

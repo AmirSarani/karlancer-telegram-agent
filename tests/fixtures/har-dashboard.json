@@ -1,0 +1,278 @@
+{
+  "status": "success",
+  "data": {
+    "wallet": {
+      "id": 1386600,
+      "user_id": 1386700,
+      "amount": 0,
+      "point": 0,
+      "score": 0,
+      "locked_amount": 0,
+      "last_month_income": 0,
+      "total_income": 19044000
+    },
+    "user": {
+      "id": 1386700,
+      "first_name": "محمد مهدی",
+      "last_name": "محمودان",
+      "username": "MohammadMahdi.M",
+      "email": null,
+      "description": "👋 سلام\n\nما یک تیم متخصص در زمینه توسعه نرم‌افزار، طراحی محصولات دیجیتال، هوش مص…",
+      "profile_status": 1471,
+      "profile_status_info": {
+        "long_description": true,
+        "avatar": true,
+        "education": true,
+        "review": true,
+        "work_experience": true,
+        "worksample": true,
+        "services": false,
+        "skills": true,
+        "verified_national_card": true,
+        "teacher": false,
+        "extra_info": true,
+        "video_avatar": false
+      },
+      "role": "freelancer",
+      "rate": 4.5,
+      "rate_num": 8,
+      "country": "تهران",
+      "city": "رودهن",
+      "telegram_id": null,
+      "avatar": "https://www.karlancer.com/f/avatar/2626/1782477512-pPpW.jpg",
+      "is_forbidden_avatar": false,
+      "email_unsubscribe_token": null,
+      "has_password": null,
+      "skills": [
+        {
+          "id": 35899,
+          "name": "متخصص هوش مصنوعی",
+          "display": "متخصص هوش مصنوعی",
+          "value": 35899,
+          "category_id": 1
+        },
+        {
+          "id": 1239,
+          "name": "طراحی سایت",
+          "display": "طراحی سایت",
+          "value": 1239,
+          "category_id": 2
+        },
+        {
+          "id": 3557,
+          "name": "بهینه سازی سایت",
+          "display": "بهینه سازی سایت",
+          "value": 3557,
+          "category_id": 1
+        }
+      ],
+      "completed_projects": 7,
+      "pending_projects": 0,
+      "plan_usage": {
+        "user_id": 1386700,
+        "plan_id": 27,
+        "total_bid": 720,
+        "used_bid": 0,
+        "start_date": "2026-08-26T20:30:00.000000Z",
+        "expire_date": "2026-11-24T20:30:00.000000Z",
+        "bid_pin": 0,
+        "bid_highlight": 3,
+        "project_stat": 112,
+        "projects": "[\"320753\",\"320743\",\"320930\",\"321021\",\"320994\",\"321006\",\"320966\",\"324105\"]",
+        "plan": {
+          "id": 27,
+          "name": "پلن طلایی سه ماهه",
+          "description": "پلن طلایی سه ماهه",
+          "slug": "PREMIUM_PLAN3_3M",
+          "amount": "699000"
+        }
+      },
+      "gender": "male",
+      "birthdate": "1383-02-02",
+      "can_use_sponsor": true,
+      "sponsor_remaining_days": null
+    },
+    "bids": [
+      {
+        "id": 7050723,
+        "description": "سلام وقت بخیر،\n\nاین پروژه فقط طراحی یک سایت ساده نیست و شامل پیاده‌سازی یک سامان…",
+        "user_id": 1386700,
+        "budget": 45000000,
+        "duration": 15,
+        "is_highlight": false,
+        "is_pin": false,
+        "is_multi": false,
+        "start_date": null,
+        "project": {
+          "id": 328277,
+          "url": "طراحی-پیادهسازی-سایت-حرفهای-سفارش-آنلاین-چاپ-پرینت-2w6o5m51o6ne",
+          "title": "طراحی و پیاده‌سازی سایت حرفه‌ای سفارش آنلاین چاپ و پرینت",
+          "description": "سایتی حرفه ای برای چاپ و پرینت که مشتری توانایی آپلود فایل داشته باشد و پس از آپ…",
+          "status": "pending",
+          "job_duration": 10,
+          "min_budget": 2000000,
+          "max_budget": 7000000,
+          "is_highlight": false,
+          "is_pin": false,
+          "is_invisible": false,
+          "is_multi": false,
+          "is_urgent": false,
+          "is_fulltime": false,
+          "is_onsite": false,
+          "is_ladder": false,
+          "is_expired": false,
+          "is_activated": false,
+          "determined_budget": true,
+          "shortened_url": "klnc.ir/l/q19w7ymx"
+        }
+      },
+      {
+        "id": 7050673,
+        "description": "سلام وقت بخیر،\n\nمشکل از دسترس خارج شدن صفحه API را به‌صورت کامل بررسی و رفع می‌ک…",
+        "user_id": 1386700,
+        "budget": 3000000,
+        "duration": 2,
+        "is_highlight": false,
+        "is_pin": false,
+        "is_multi": false,
+        "start_date": null,
+        "project": {
+          "id": 328331,
+          "url": "اصلاح-مجدد-صفحه-api-m080r470184r",
+          "title": "اصلاح مجدد صفحه api",
+          "description": "صفحه ای پی آی که قبلا تعریف شده بود از دسترس خارج شده و نیاز به بررسی دارد",
+          "status": "pending",
+          "job_duration": 1,
+          "min_budget": 1000000,
+          "max_budget": 7000000,
+          "is_highlight": false,
+          "is_pin": false,
+          "is_invisible": false,
+          "is_multi": false,
+          "is_urgent": false,
+          "is_fulltime": false,
+          "is_onsite": false,
+          "is_ladder": false,
+          "is_expired": false,
+          "is_activated": false,
+          "determined_budget": false,
+          "shortened_url": "klnc.ir/l/q5nom21q"
+        }
+      }
+    ],
+    "bid_plan": [
+      {
+        "user_id": 1386700,
+        "plan_id": 27,
+        "total_bid": 720,
+        "used_bid": 519,
+        "start_date": "2026-08-27",
+        "expire_date": "2026-11-25",
+        "plan": {
+          "id": 27,
+          "name": "پلن طلایی سه ماهه",
+          "description": "پلن طلایی سه ماهه",
+          "slug": "PREMIUM_PLAN3_3M",
+          "amount": "699000"
+        }
+      }
+    ],
+    "orders": [],
+    "rooms": [
+      {
+        "id": 7268842,
+        "guest_name": "VS626CZ6333",
+        "rate_num": null,
+        "rate_sum": null,
+        "rate": "N/A",
+        "avatar": null,
+        "last_message": "پیشنهاد بر روی پروژه «طراحی و پیاده‌سازی سایت حرفه",
+        "user_id": 1557196,
+        "active_plan_id": 10,
+        "is_locked": false,
+        "am_locked": 0,
+        "is_online": false,
+        "is_open": 0,
+        "employer_is_open": 1,
+        "is_archived": 0,
+        "is_hidden": false,
+        "updated_at": "2026-09-22T06:41:47.000000Z",
+        "unread": 0,
+        "quiz_num": null,
+        "quiz_point": null,
+        "quiz_type": null,
+        "opening_trigger": null
+      },
+      {
+        "id": 7268757,
+        "guest_name": "Ahmad.J",
+        "rate_num": 4,
+        "rate_sum": 16,
+        "rate": 4,
+        "avatar": "https://www.karlancer.com/f/avatar/1724250768-t9S3.jpg",
+        "last_message": "پیشنهاد بر روی پروژه «اصلاح مجدد صفحه api»",
+        "user_id": 614952,
+        "active_plan_id": 10,
+        "is_locked": false,
+        "am_locked": 0,
+        "is_online": false,
+        "is_open": 0,
+        "employer_is_open": 1,
+        "is_archived": 0,
+        "is_hidden": false,
+        "updated_at": "2026-09-22T06:36:12.000000Z",
+        "unread": 0,
+        "quiz_num": null,
+        "quiz_point": null,
+        "quiz_type": null,
+        "opening_trigger": null
+      }
+    ],
+    "quizzes": [
+      {
+        "id": 1,
+        "name": "سئو",
+        "slug": "seo",
+        "image_url": "https://www.karlancer.com/api/file/seoContents/1690706912-YgC6.png",
+        "category_id": 8,
+        "user_skill": null,
+        "user_taken": true,
+        "gold_expire_at": "2027-06-15T20:30:00.000000Z",
+        "silver_expire_at": null
+      },
+      {
+        "id": 3,
+        "name": "وردپرس",
+        "slug": "wordpress",
+        "image_url": "https://www.karlancer.com/api/file/seoContents/1690702099-pEGk.png",
+        "category_id": 6,
+        "user_skill": null,
+        "user_taken": false,
+        "gold_expire_at": null,
+        "silver_expire_at": null
+      },
+      {
+        "id": 4,
+        "name": "HTML",
+        "slug": "html",
+        "image_url": "https://www.karlancer.com/api/file/seoContents/1690702223-GqCz.png",
+        "category_id": 6,
+        "user_skill": null,
+        "user_taken": false,
+        "gold_expire_at": null,
+        "silver_expire_at": null
+      }
+    ],
+    "pending_projects": null,
+    "completed_projects": null,
+    "in_progress_projects": [],
+    "suggest_projects_count": 2419,
+    "xray": {
+      "credit": 1,
+      "status": "done",
+      "token": null,
+      "old_data": true
+    }
+  },
+  "error": null
+}

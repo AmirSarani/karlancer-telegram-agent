@@ -1,0 +1,62 @@
+{
+  "status": "success",
+  "data": {
+    "plans": {
+      "id": 99624,
+      "user_id": 1386700,
+      "plan_id": 27,
+      "total_bid": 720,
+      "used_bid": 0,
+      "bid_pin": 0,
+      "bid_highlight": 3,
+      "project_stat": 112,
+      "projects": "[\"320753\",\"320743\",\"320930\",\"321021\",\"320994\",\"321006\",\"320966\",\"324105\"]",
+      "start_date": "2026-08-26T20:30:00.000000Z",
+      "expire_date": "2026-11-24T20:30:00.000000Z",
+      "created_at": "2026-08-26T20:53:25.000000Z",
+      "updated_at": "2026-09-18T13:26:15.000000Z",
+      "deleted_at": null,
+      "plan": {
+        "id": 27,
+        "name": "پلن طلایی سه ماهه",
+        "slug": "PREMIUM_PLAN3_3M",
+        "amount": "699000",
+        "length": 90,
+        "is_available": 1,
+        "type": "plan",
+        "total_bid": 720,
+        "max_skills": 10,
+        "commission": 8,
+        "sms_subscribed": 1,
+        "email_subscribed": null,
+        "bid_pin": 18,
+        "bid_highlight": 18,
+        "project_stat": 120,
+        "description": "پلن طلایی سه ماهه",
+        "created_at": "2023-01-07T05:30:00.000000Z",
+        "updated_at": "2026-02-07T11:54:42.000000Z",
+        "items": [],
+        "base_discount_amount": 951000
+      }
+    },
+    "bidplans": [
+      {
+        "id": 2755188,
+        "user_id": 1386700,
+        "plan_id": 27,
+        "start_date": "2026-08-27",
+        "expire_date": "2026-11-25",
+        "total_bid": 720,
+        "used_bid": 519,
+        "created_at": "2026-08-26T20:53:25.000000Z",
+        "updated_at": "2026-09-22T06:41:46.000000Z",
+        "deleted_at": null
+      }
+    ],
+    "special_offer": false,
+    "special_offer_items": null,
+    "deadline": null,
+    "special_offer_amount": null
+  },
+  "error": null
+}
