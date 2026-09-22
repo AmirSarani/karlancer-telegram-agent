@@ -84,7 +84,7 @@ export function roomsListKeyboard(pageRooms, { page = 1, totalPages = 1, unreadO
  */
 export function parseRoomCallback(data) {
   if (typeof data !== 'string' || !data) return null;
-  const m = /^room:(open|ok|no|note|ref|ai|cfm|ccl):([0-9A-Za-z_-]{1,24})$/.exec(data);
+  const m = /^room:(open|ok|no|note|ref|ai|cfm|ccl|done):([0-9A-Za-z_-]{1,24})$/.exec(data);
   if (!m) return null;
   const map = {
     open: 'room_open',
@@ -95,6 +95,7 @@ export function parseRoomCallback(data) {
     ai: 'room_ai',
     cfm: 'room_confirm_send',
     ccl: 'room_cancel_confirm',
+    done: 'room_done',
   };
   return { type: map[m[1]], roomId: m[2] };
 }

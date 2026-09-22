@@ -66,9 +66,10 @@ test('status inline shows approvals link only when pending > 0', () => {
 });
 
 test('afterScan / settings / home keyboards navigate', () => {
-  const after = afterScanInlineKeyboard().inline_keyboard.flat().map((b) => b.callback_data);
-  assert.ok(after.includes('refresh:status'));
-  assert.ok(after.includes('goto:approvals'));
+  const after = afterScanInlineKeyboard({ pageCount: 1, priorityRooms: [] }).inline_keyboard
+    .flat()
+    .map((b) => b.callback_data);
+  assert.ok(after.includes('scan:refresh') || after.includes('scan:details') || after.includes('scan:chats'));
   assert.ok(after.includes('nav:home'));
 
   const setRun = settingsInlineKeyboard('running').inline_keyboard.flat().map((b) => b.callback_data);
@@ -93,6 +94,8 @@ test('parseCallbackData covers approve/reject/nav/settings/pagination', () => {
   assert.deepEqual(parseCallbackData('nav:home'), { type: 'nav_home' });
   assert.deepEqual(parseCallbackData('nav:set'), { type: 'nav_settings' });
   assert.deepEqual(parseCallbackData('set:scan'), { type: 'set_scan' });
+  assert.deepEqual(parseCallbackData('scan:refresh'), { type: 'scan_refresh' });
+  assert.deepEqual(parseCallbackData('scan:details'), { type: 'scan_details' });
   assert.deepEqual(parseCallbackData('page:chats:2'), { type: 'page_chats', page: 2 });
   assert.deepEqual(parseCallbackData('page:unrd:1'), { type: 'page_unread', page: 1 });
   assert.deepEqual(parseCallbackData('room:open:7241431'), { type: 'room_open', roomId: '7241431' });

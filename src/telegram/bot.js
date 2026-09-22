@@ -14,6 +14,18 @@ import {
   formatHelp,
   formatSettingsCard,
   formatScanQueued,
+  findActiveScanJob,
+  formatScanAlreadyRunning,
+  formatScanDetails,
+  formatScanPriorityList,
+  formatScanUnreadList,
+  formatScanRoomCard,
+  buildScanKeyboard,
+  buildScanDetailsKeyboard,
+  buildScanPriorityKeyboard,
+  buildScanUnreadKeyboard,
+  buildScanRoomKeyboard,
+  buildScanResultMessage,
   formatDecideResult,
   formatFriendlyError,
   mapMenuText,
@@ -86,16 +98,99 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       ? createRoomFlows({ db, queue, api, llm, menuOpts })
       : null;
 
+  /** @type {{ chatId: number, messageId: number, jobId?: string } | null} */
+  let pendingScanMessage = null;
+
+  function setPendingScanMessage(info) {
+    pendingScanMessage = info;
+    if (typeof hooks.onScanMessage === 'function') {
+      try {
+        hooks.onScanMessage(info);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   async function editOrReply(ctx, text, extra = {}, { edit = false } = {}) {
     if (edit && ctx.callbackQuery) {
       try {
         await ctx.editMessageText(text, extra);
-        return;
+        const messageId = ctx.callbackQuery.message?.message_id;
+        const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat?.id;
+        return { edited: true, messageId, chatId };
       } catch {
         /* fall through */
       }
     }
-    await ctx.reply(text, { ...menuOpts(), ...extra });
+    const msg = await ctx.reply(text, { ...menuOpts(), ...extra });
+    return {
+      edited: false,
+      messageId: msg?.message_id,
+      chatId: ctx.chat?.id ?? msg?.chat?.id,
+    };
+  }
+
+  function readLastScanSummary() {
+    if (!db) return null;
+    try {
+      const row = db.prepare(`SELECT value, updated_at FROM kv WHERE key = 'last_scan_summary'`).get();
+      if (!row?.value) return null;
+      const summary = JSON.parse(row.value);
+      return { ...summary, scannedAt: summary.scannedAt || row.updated_at };
+    } catch {
+      return null;
+    }
+  }
+
+  async function renderScanView(ctx, view, { edit = true, page = 1, roomId = null } = {}) {
+    const summary = readLastScanSummary() || {};
+    if (view === 'summary') {
+      const { text, reply_markup } = buildScanResultMessage(summary);
+      await editOrReply(ctx, text, { reply_markup }, { edit });
+      return;
+    }
+    if (view === 'details') {
+      await editOrReply(
+        ctx,
+        formatScanDetails(summary),
+        { reply_markup: buildScanDetailsKeyboard(summary) },
+        { edit }
+      );
+      return;
+    }
+    if (view === 'priority') {
+      await editOrReply(
+        ctx,
+        formatScanPriorityList(summary, { page }),
+        { reply_markup: buildScanPriorityKeyboard(summary, { page }) },
+        { edit }
+      );
+      return;
+    }
+    if (view === 'unread') {
+      await editOrReply(
+        ctx,
+        formatScanUnreadList(summary),
+        { reply_markup: buildScanUnreadKeyboard(summary) },
+        { edit }
+      );
+      return;
+    }
+    if (view === 'room' || view === 'room_details') {
+      const rooms = Array.isArray(summary.priorityRooms) ? summary.priorityRooms : [];
+      const room = rooms.find((r) => String(r.roomId ?? r.id) === String(roomId)) || {
+        roomId,
+        guest_name: 'گفتگو',
+      };
+      const aiAvailable = Boolean(llm);
+      await editOrReply(
+        ctx,
+        formatScanRoomCard(room, { showDetails: view === 'room_details' }),
+        { reply_markup: buildScanRoomKeyboard(roomId, { aiAvailable }) },
+        { edit }
+      );
+    }
   }
 
   async function collectStatus() {
@@ -301,7 +396,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     await ctx.reply('▶️ ایجنت دوباره فعال است.', menuOpts());
   }
 
-  async function doScan(ctx, { edit = false } = {}) {
+  async function doScan(ctx, { edit = false, page = 1 } = {}) {
     if (!queue) {
       const { text, keyboard } = formatFriendlyError('صف job وصل نیست.', {
         retryCallback: 'set:scan',
@@ -318,17 +413,34 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       );
       return;
     }
+    const active = findActiveScanJob(queue);
+    if (active) {
+      const text = formatScanAlreadyRunning({ jobId: active.jobId });
+      const sent = await editOrReply(
+        ctx,
+        text,
+        { reply_markup: buildScanKeyboard({ alreadyRunning: true, jobId: active.jobId }) },
+        { edit }
+      );
+      if (sent?.messageId != null) {
+        setPendingScanMessage({ chatId: sent.chatId, messageId: sent.messageId, jobId: active.jobId });
+      }
+      return;
+    }
     const job = queue.create({
       goal: 'rooms.scan',
       requestedBy: `telegram:${ctx.from?.id}`,
-      payload: { page: 1 },
+      payload: { page },
     });
-    await editOrReply(
+    const sent = await editOrReply(
       ctx,
       formatScanQueued(job.jobId),
-      { reply_markup: afterScanInlineKeyboard() },
+      { reply_markup: buildScanKeyboard({ loading: true, jobId: job.jobId }) },
       { edit }
     );
+    if (sent?.messageId != null) {
+      setPendingScanMessage({ chatId: sent.chatId, messageId: sent.messageId, jobId: job.jobId });
+    }
   }
 
   async function decide(ctx, approve, approvalIdHint) {
@@ -565,6 +677,69 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       return;
     }
 
+
+    if (parsed.type === 'scan_priority') {
+      await ctx.answerCallbackQuery({ text: 'اولویت‌ها…' });
+      await renderScanView(ctx, 'priority', { edit: true, page: 1 });
+      return;
+    }
+    if (parsed.type === 'scan_unread') {
+      await ctx.answerCallbackQuery({ text: 'خوانده‌نشده…' });
+      await renderScanView(ctx, 'unread', { edit: true });
+      return;
+    }
+    if (parsed.type === 'scan_refresh') {
+      await ctx.answerCallbackQuery({ text: 'اسکن…' });
+      await doScan(ctx, { edit: true });
+      return;
+    }
+    if (parsed.type === 'scan_chats') {
+      await ctx.answerCallbackQuery();
+      if (!roomFlows) {
+        await ctx.reply('گفتگوها در دسترس نیست.', menuOpts());
+        return;
+      }
+      await roomFlows.replyRoomsList(ctx, { unreadOnly: false, edit: true, page: 1 });
+      return;
+    }
+    if (parsed.type === 'scan_details') {
+      await ctx.answerCallbackQuery({ text: 'جزئیات…' });
+      await renderScanView(ctx, 'details', { edit: true });
+      return;
+    }
+    if (parsed.type === 'scan_back') {
+      await ctx.answerCallbackQuery();
+      await renderScanView(ctx, 'summary', { edit: true });
+      return;
+    }
+    if (parsed.type === 'scan_page') {
+      await ctx.answerCallbackQuery();
+      // Prefer priority pagination when last summary has priority rooms; else re-scan page
+      const summary = readLastScanSummary();
+      if (summary?.priorityRooms?.length) {
+        await renderScanView(ctx, 'priority', { edit: true, page: parsed.page || 1 });
+      } else {
+        await doScan(ctx, { edit: true, page: parsed.page || 1 });
+      }
+      return;
+    }
+    if (parsed.type === 'scan_room_details') {
+      await ctx.answerCallbackQuery();
+      await renderScanView(ctx, 'room_details', { edit: true, roomId: parsed.roomId });
+      return;
+    }
+    if (parsed.type === 'room_done') {
+      await ctx.answerCallbackQuery({ text: 'بررسی شد' });
+      if (roomFlows?.roomState?.setDecision) {
+        roomFlows.roomState.setDecision(parsed.roomId, {
+          status: 'reviewed',
+          detail: 'scan_done',
+        });
+      }
+      await renderScanView(ctx, 'summary', { edit: true });
+      return;
+    }
+
     if (parsed.type?.startsWith('room_')) {
       if (!roomFlows) {
         await ctx.answerCallbackQuery({ text: 'db نیست', show_alert: true });
@@ -644,6 +819,17 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
   return {
     bot,
     runtime,
+    getPendingScanMessage: () => pendingScanMessage,
+    clearPendingScanMessage: () => {
+      pendingScanMessage = null;
+      if (typeof hooks.onScanMessage === 'function') {
+        try {
+          hooks.onScanMessage(null);
+        } catch {
+          /* ignore */
+        }
+      }
+    },
     async start() {
       console.log('[telegram] starting long polling…');
       try {

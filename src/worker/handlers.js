@@ -120,14 +120,19 @@ export async function handleJob(ctx, job) {
           return bt - at;
         })
         .slice(0, 5)
-        .map((r) => ({
-          guest_name: r.guestName || r.title || '—',
-          roomId: r.id,
-          unread: Number(r.unread) || 0,
-          last_message: String(r.lastMessage || '').slice(0, 120),
-        }));
+        .map((r) => {
+          const unread = Number(r.unread) || 0;
+          return {
+            guest_name: r.guestName || r.title || '—',
+            roomId: r.id,
+            unread,
+            last_message: String(r.lastMessage || '').slice(0, 120),
+            reason: unread > 0 ? 'پیام جدید' : undefined,
+          };
+        });
 
       const matched = [];
+      let softFailCount = 0;
       for (const room of list) {
         try {
           const last = (room.lastMessage || '').toLowerCase();
@@ -168,11 +173,21 @@ export async function handleJob(ctx, job) {
             meta: { updatedAt: room.updatedAt },
           });
         } catch (e) {
+          softFailCount += 1;
           logger.warn('rooms_scan_room_failed', { roomId: room?.id, err: e.message, code: e.code });
         }
       }
 
       const scannedAt = new Date().toISOString();
+      const matchedIds = new Set(matched.map((m) => String(m.roomId)));
+      for (const pr of priorityRooms) {
+        if (matchedIds.has(String(pr.roomId))) {
+          pr.reason = pr.reason || 'تطابق کلیدواژه';
+          pr.keywordMatched = true;
+        } else if (!pr.reason) {
+          // leave undefined → UX shows conservative label
+        }
+      }
       const summary = {
         page,
         total: pagination?.total ?? list.length,
@@ -181,6 +196,8 @@ export async function handleJob(ctx, job) {
         unreadOnPage,
         matchedCount: matched.length,
         priorityRooms,
+        softFailCount,
+        partial: softFailCount > 0,
         scannedAt,
       };
       // Persist for /status and /start (optional kv)

@@ -32,4 +32,29 @@ export async function notifyOwner({ token, chatId, text, reply_markup } = {}) {
   }
 }
 
+
+/**
+ * Edit an existing owner message (for scan loading → result).
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function editOwnerMessage({ token, chatId, messageId, text, reply_markup } = {}) {
+  if (!token || chatId == null || chatId === '' || messageId == null) {
+    return { ok: false, error: 'missing_config' };
+  }
+  const safeText = redactString(String(text || '')).slice(0, 4000);
+  if (!safeText.trim()) {
+    return { ok: false, error: 'empty_text' };
+  }
+  try {
+    const bot = new Bot(String(token));
+    const opts = {};
+    if (reply_markup) opts.reply_markup = reply_markup;
+    await bot.api.editMessageText(Number(chatId) || chatId, Number(messageId), safeText, opts);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: redactString(String(e?.message || e)).slice(0, 200) };
+  }
+}
+
 export default notifyOwner;
+

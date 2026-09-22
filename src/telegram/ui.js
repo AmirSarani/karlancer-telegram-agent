@@ -1,6 +1,56 @@
 import { Keyboard, InlineKeyboard } from 'grammy';
 import { redactString } from '../security/redaction.js';
 import { parseRoomCallback } from './room-card.js';
+import {
+  formatScanSummary as formatScanSummaryUx,
+  formatScanQueued as formatScanQueuedUx,
+  truncatePersianText,
+  afterScanInlineKeyboard as afterScanInlineKeyboardUx,
+  buildScanKeyboard,
+  buildScanResultMessage,
+  parseScanCallback,
+  findActiveScanJob,
+  formatScanDetails,
+  formatScanPriorityList,
+  formatScanUnreadList,
+  formatScanRoomCard,
+  formatScanLoading,
+  formatScanAlreadyRunning,
+  formatScanError,
+  buildScanDetailsKeyboard,
+  buildScanPriorityKeyboard,
+  buildScanUnreadKeyboard,
+  buildScanRoomKeyboard,
+  deriveScanState,
+  SCAN_STATES,
+  toFaNum,
+  formatRelativeTime,
+  priorityReasonLabel,
+} from './scan-ux.js';
+
+export {
+  truncatePersianText,
+  buildScanKeyboard,
+  buildScanResultMessage,
+  parseScanCallback,
+  findActiveScanJob,
+  formatScanDetails,
+  formatScanPriorityList,
+  formatScanUnreadList,
+  formatScanRoomCard,
+  formatScanLoading,
+  formatScanAlreadyRunning,
+  formatScanError,
+  buildScanDetailsKeyboard,
+  buildScanPriorityKeyboard,
+  buildScanUnreadKeyboard,
+  buildScanRoomKeyboard,
+  deriveScanState,
+  SCAN_STATES,
+  toFaNum,
+  formatRelativeTime,
+  priorityReasonLabel,
+};
 
 /** Reply-keyboard button labels (exact match for hears / text map). Max 6 main items. */
 export const BTN = Object.freeze({
@@ -91,15 +141,8 @@ export function statusInlineKeyboard({ pendingCount = 0 } = {}) {
   return kb;
 }
 
-export function afterScanInlineKeyboard() {
-  return new InlineKeyboard()
-    .text('📋 تأییدها', 'goto:approvals')
-    .text('💬 گفتگوها', 'goto:chats')
-    .row()
-    .text('🔔 هشدارها', 'goto:unread')
-    .text('📊 داشبورد', 'refresh:status')
-    .row()
-    .text('🏠 خانه', 'nav:home');
+export function afterScanInlineKeyboard(summary = {}) {
+  return afterScanInlineKeyboardUx(summary);
 }
 
 /**
@@ -138,6 +181,8 @@ export function homeInlineKeyboard() {
  */
 export function parseCallbackData(data) {
   if (typeof data !== 'string' || !data) return null;
+  const scan = parseScanCallback(data);
+  if (scan) return scan;
   if (data === 'refresh:status') return { type: 'refresh_status' };
   if (data === 'goto:approvals') return { type: 'goto_approvals' };
   if (data === 'goto:chats') return { type: 'goto_chats' };
@@ -401,14 +446,7 @@ export function formatHelp() {
 }
 
 export function formatScanQueued(jobId) {
-  const short = String(jobId || '').slice(0, 8);
-  return [
-    '⏳ در صف…',
-    'اسکن دعوت‌ها ثبت شد.',
-    `job: ${short}…`,
-    '',
-    'پس از اتمام، خلاصه برایتان می‌آید.',
-  ].join('\n');
+  return formatScanQueuedUx(jobId);
 }
 
 export function formatDecideResult({ approve, approvalId, jobStatus, note }) {
@@ -541,50 +579,12 @@ export function mapMenuText(text) {
  * @param {number} [max=72]
  */
 export function truncatePreview(s, max = 72) {
-  const t = redactString(String(s || '')).replace(/\s+/g, ' ').trim();
-  if (t.length <= max) return t;
-  return t.slice(0, Math.max(0, max - 1)) + '…';
+  return truncatePersianText(s, { max, lines: 2 });
 }
 
 /**
  * Persian summary card after rooms.scan (one message per job).
  */
 export function formatScanSummary(s = {}) {
-  const page = s.page ?? 1;
-  const total = s.total != null ? s.total : '—';
-  const lastPage = s.lastPage != null ? s.lastPage : null;
-  const pageCount = s.pageCount ?? (s.priorityRooms?.length ?? 0);
-  const unread = s.unreadOnPage ?? 0;
-  const matched = s.matchedCount ?? 0;
-  const pageLabel = lastPage != null ? `${page}/${lastPage}` : String(page);
-
-  const lines = [
-    '📡 خلاصه اسکن',
-    '————————',
-    '',
-    `• صفحه: ${pageLabel} · در صفحه: ${pageCount}`,
-    `• مجموع اتاق‌ها: ${total}`,
-    `• خوانده‌نشده: ${unread}`,
-    matched > 0 ? `• کاندید کلیدواژه: ${matched}` : null,
-  ].filter((x) => x != null);
-
-  const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms.slice(0, 5) : [];
-  if (rooms.length) {
-    lines.push('', '🔝 اولویت‌ها:');
-    for (let i = 0; i < rooms.length; i++) {
-      const r = rooms[i];
-      const name = r.guest_name || r.guestName || r.title || '—';
-      const id = r.roomId ?? r.id ?? '—';
-      const ur = Number(r.unread) > 0 ? '🔴' : '⚪';
-      const preview = truncatePreview(r.last_message || r.lastMessage || '', 64);
-      lines.push(`${i + 1}. ${ur} ${name} · #${id}`);
-      if (preview) lines.push(`   «${preview}»`);
-    }
-  } else {
-    lines.push('', 'اولویتی در این صفحه نبود — همه آرام است.');
-  }
-
-  lines.push('', '➡️ بعدی: هشدارها یا تأییدها');
-  if (s.scannedAt) lines.push(`⏱ ${formatAgeFa(s.scannedAt)}`);
-  return lines.join('\n');
+  return formatScanSummaryUx(s);
 }

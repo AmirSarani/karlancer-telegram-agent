@@ -10,8 +10,8 @@ import { buildHealth } from './observability/health.js';
 import { createScheduler } from './worker/scheduler.js';
 import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
-import { notifyOwner } from './telegram/notify.js';
-import { formatScanSummary, afterScanInlineKeyboard } from './telegram/ui.js';
+import { notifyOwner, editOwnerMessage } from './telegram/notify.js';
+import { formatScanSummary, afterScanInlineKeyboard, buildScanResultMessage } from './telegram/ui.js';
 import { formatRoomCard, roomCardKeyboard } from './telegram/room-card.js';
 import { createRoomState } from './agent/room-state.js';
 
@@ -77,6 +77,9 @@ async function main() {
 
   /** One Telegram notify per rooms.scan job (owner-only). */
   let lastNotifiedScanAt = null;
+  /** @type {{ chatId: number, messageId: number, jobId?: string } | null} */
+  let pendingScanUi = null;
+
   async function notifyScanIfNeeded(summary) {
     if (!config.enableTelegram || !config.telegramBotToken || config.telegramOwnerChatId == null) {
       return;
@@ -84,12 +87,29 @@ async function main() {
     if (!summary?.scannedAt) return;
     if (lastNotifiedScanAt === summary.scannedAt) return;
     lastNotifiedScanAt = summary.scannedAt;
-    const text = formatScanSummary(summary);
+    const built = buildScanResultMessage(summary);
+    const text = built.text || formatScanSummary(summary);
+    const reply_markup = built.reply_markup || afterScanInlineKeyboard(summary);
+    if (pendingScanUi?.messageId != null) {
+      const edited = await editOwnerMessage({
+        token: config.telegramBotToken,
+        chatId: pendingScanUi.chatId ?? config.telegramOwnerChatId,
+        messageId: pendingScanUi.messageId,
+        text,
+        reply_markup,
+      });
+      pendingScanUi = null;
+      if (edited.ok) {
+        logger.info('telegram_scan_edited', { page: summary.page, unread: summary.unreadOnPage });
+        return;
+      }
+      logger.warn('telegram_scan_edit_failed', { error: edited.error });
+    }
     const res = await notifyOwner({
       token: config.telegramBotToken,
       chatId: config.telegramOwnerChatId,
       text,
-      reply_markup: afterScanInlineKeyboard(),
+      reply_markup,
     });
     if (!res.ok) {
       logger.warn('telegram_scan_notify_failed', { error: res.error });
@@ -169,6 +189,9 @@ async function main() {
       token: config.telegramBotToken,
       ownerChatId: config.telegramOwnerChatId,
       hooks: {
+        onScanMessage: (info) => {
+          pendingScanUi = info;
+        },
         queue,
         db,
         api,

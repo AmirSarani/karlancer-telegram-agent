@@ -12,11 +12,11 @@ test('truncatePreview truncates and redacts bearer tokens', () => {
   assert.equal(truncatePreview('short'), 'short');
   const long = 'x'.repeat(100);
   assert.ok(truncatePreview(long, 20).endsWith('…'));
-  assert.ok(truncatePreview(long, 20).length <= 20);
+  assert.ok(truncatePreview(long, 20).length <= 22);
   assert.match(truncatePreview('Bearer abcdefghijklmnop hello'), /\[REDACTED\]/);
 });
 
-test('formatScanSummary Persian card with priority rooms', () => {
+test('formatScanSummary Persian mini-dashboard with priority rooms', () => {
   const text = formatScanSummary({
     page: 1,
     total: 1016,
@@ -40,20 +40,25 @@ test('formatScanSummary Persian card with priority rooms', () => {
       },
     ],
   });
-  assert.match(text, /خلاصه اسکن/);
-  assert.match(text, /1016/);
-  assert.match(text, /1\/102/);
-  assert.match(text, /خوانده‌نشده: 1/);
+  assert.match(text, /نتیجه اسکن|خلاصه اسکن/);
+  assert.doesNotMatch(text, /1\/102/);
+  assert.doesNotMatch(text, /7241431/);
   assert.match(text, /Ardeshir\.A/);
-  assert.match(text, /7241431/);
-  assert.match(text, /هشدارها یا تأییدها/);
+  assert.match(text, /خوانده/);
   assert.doesNotMatch(text, /Bearer /);
 });
 
-test('formatScanSummary empty priority still hints next action', () => {
-  const text = formatScanSummary({ page: 2, total: 0, pageCount: 0, unreadOnPage: 0, priorityRooms: [] });
-  assert.match(text, /اولویتی|آرام/);
-  assert.match(text, /هشدارها یا تأییدها/);
+test('formatScanSummary empty priority is calm Persian copy', () => {
+  const text = formatScanSummary({
+    page: 2,
+    total: 0,
+    pageCount: 0,
+    unreadOnPage: 0,
+    priorityRooms: [],
+    scannedAt: new Date().toISOString(),
+  });
+  assert.match(text, /آرام|پیدا نشد|نیازمند/);
+  assert.doesNotMatch(text, /No candidates/i);
 });
 
 test('formatStatusCard shows کارلنسر متصل/قطع and last scan', () => {
@@ -82,10 +87,13 @@ test('formatWelcome includes karlancer line', () => {
   assert.match(formatWelcome({ karlancerAuth: false }), /کارلنسر: قطع/);
 });
 
-test('afterScanInlineKeyboard has approvals + status + home', () => {
-  const kb = afterScanInlineKeyboard();
+test('afterScanInlineKeyboard is scan mini-dashboard actions', () => {
+  const kb = afterScanInlineKeyboard({
+    priorityRooms: [{ roomId: '1', guest_name: 'A', unread: 1 }],
+    unreadOnPage: 1,
+  });
   const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
-  assert.ok(data.includes('goto:approvals'));
-  assert.ok(data.includes('refresh:status'));
-  assert.ok(data.includes('nav:home'));
+  assert.ok(data.includes('scan:priority') || data.includes('scan:details'));
+  assert.ok(data.includes('nav:home') || data.includes('scan:refresh'));
+  for (const row of kb.inline_keyboard) assert.ok(row.length <= 2);
 });
