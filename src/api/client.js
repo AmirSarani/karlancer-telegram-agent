@@ -34,6 +34,8 @@ export class KarlancerClient {
     this.rateLimiter = opts.rateLimiter || new RateLimiter({ capacity: 30, refillPerSec: 8 });
     this._circuitOpenUntil = 0;
     this._consecutiveFailures = 0;
+    /** @type {null|((info: {status:number, path:string}) => void)} */
+    this.onUnauthorized = opts.onUnauthorized || null;
   }
 
   get hasAuth() {
@@ -139,6 +141,17 @@ export class KarlancerClient {
         if (!res.ok) {
           const err = mapHttpError(res.status, path, sanitizeBody(json));
           this._consecutiveFailures = 0;
+          if (
+            (res.status === 401 || res.status === 403) &&
+            typeof this.onUnauthorized === 'function' &&
+            !String(path || '').includes('/api/login/')
+          ) {
+            try {
+              this.onUnauthorized({ status: res.status, path });
+            } catch {
+              /* ignore notify errors */
+            }
+          }
           throw err;
         }
 

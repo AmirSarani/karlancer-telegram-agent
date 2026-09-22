@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { loadAppConfig } from './config.js';
 import { openDb, acquireSingleWorkerConsumerLock } from './memory/db.js';
 import { createJobQueue } from './worker/queue.js';
@@ -11,6 +12,7 @@ import { createScheduler } from './worker/scheduler.js';
 import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
 import { notifyOwner, editOwnerMessage } from './telegram/notify.js';
+import { maybeNotifySessionExpired } from './telegram/relogin-flow.js';
 import { formatScanSummary, afterScanInlineKeyboard, buildScanResultMessage } from './telegram/ui.js';
 import { formatRoomCard, roomCardKeyboard } from './telegram/room-card.js';
 import { createRoomState } from './agent/room-state.js';
@@ -44,6 +46,25 @@ async function main() {
     cookie: config.karlancerCookie,
     timeoutMs: config.karlancerTimeoutMs,
   });
+
+  // Soft-notify owners on Karlancer 401/403 (rate-limited); never include token.
+  api.client.onUnauthorized = ({ status, path: pth }) => {
+    void status;
+    void pth;
+    if (!config.enableTelegram || !config.telegramBotToken) return;
+    const owners = config.telegramOwnerChatIds || [];
+    void maybeNotifySessionExpired({
+      ownerChatIds: owners,
+      notify: async (chatId, text) => {
+        await notifyOwner({
+          token: config.telegramBotToken,
+          chatId,
+          text,
+        });
+      },
+    });
+  };
+
 
   const budget = new TokenBudgetManager({
     dailyTokenLimit: config.dailyTokenLimit,
@@ -190,6 +211,7 @@ async function main() {
       ownerChatId: config.telegramOwnerChatId,
       ownerChatIds: config.telegramOwnerChatIds,
       hooks: {
+        envFile: path.join(config.root, '.env'),
         onScanMessage: (info) => {
           pendingScanUi = info;
         },

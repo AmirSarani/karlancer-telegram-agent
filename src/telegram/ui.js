@@ -176,6 +176,8 @@ export function settingsInlineKeyboard(agentState = 'running') {
   }
   kb.text('📡 اجرای اسکن', 'set:scan')
     .row()
+    .text('🔐 تمدید نشست', 'set:relogin')
+    .row()
     .text('⬅️ بازگشت', 'nav:dash')
     .text('🏠 خانه', 'nav:home')
     .row()
@@ -215,6 +217,8 @@ export function parseCallbackData(data) {
   if (data === 'set:pause') return { type: 'set_pause' };
   if (data === 'set:resume') return { type: 'set_resume' };
   if (data === 'set:scan') return { type: 'set_scan' };
+  if (data === 'set:relogin') return { type: 'set_relogin' };
+  if (data === 'set:relogin:cancel') return { type: 'set_relogin_cancel' };
 
   const pageM = /^page:(chats|unrd):(\d{1,4})$/.exec(data);
   if (pageM) {
@@ -407,6 +411,12 @@ export function formatSystemDetails(s = {}) {
 export function formatSettingsCard(s = {}) {
   const stateFa = s.state === 'paused' ? '⏸ مکث' : '▶️ فعال';
   const approvalMode = s.mutationNeedsApproval === false ? 'خاموش' : 'روشن';
+  const authLine =
+    s.karlancerAuth === true
+      ? '• نشست کارلنسر: ✅ فعال'
+      : s.karlancerAuth === false
+        ? '• نشست کارلنسر: ❌ منقضی / نامعتبر — «تمدید نشست» را بزنید'
+        : '• نشست کارلنسر: ❔ نامشخص';
   return [
     '⚙️ تنظیمات',
     '————————',
@@ -414,9 +424,11 @@ export function formatSettingsCard(s = {}) {
     `• ایجنت: ${stateFa}`,
     '• اسکن: بررسی گفتگوها و موارد مهم',
     `• عملیات نیازمند تأیید: ${approvalMode}`,
+    authLine,
     '',
-    'از دکمه‌های زیر مکث، ادامه یا اجرای اسکن را بزنید.',
+    'از دکمه‌های زیر مکث، ادامه، اسکن یا تمدید نشست را بزنید.',
     'هر ارسال واقعی فقط بعد از تأیید شما انجام می‌شود.',
+    '⚠️ رمز عبور را در تلگرام نگه ندارید؛ پس از ورود پیام‌ها را پاک کنید.',
   ].join('\n');
 }
 
@@ -528,7 +540,7 @@ export function formatHelp() {
     `• ${BTN.CHATS} — لیست گفتگوها`,
     `• ${BTN.ALERTS} — موارد نیازمند توجه`,
     `• ${BTN.APPROVALS} — تأیید یا رد عملیات`,
-    `• ${BTN.SETTINGS} — مکث / ادامه / اسکن`,
+    `• ${BTN.SETTINGS} — مکث / ادامه / اسکن / تمدید نشست`,
     '',
     'داخل هر گفتگو: مشاهده · تحلیل AI · نوت',
     'قبل از ارسال، پیش‌نمایش و تأیید نهایی می‌آید.',
@@ -537,6 +549,9 @@ export function formatHelp() {
     '/approvals · /settings · /scan · /help',
     '',
     'عملیات حساس فقط بعد از تأیید شما اجرا می‌شود.',
+    '',
+    'تمدید نشست کارلنسر از تنظیمات (فقط مالک).',
+    'رمز/توکن را در چت نگه ندارید؛ تلگرام ممکن است تاریخچه نگه دارد.',
   ].join('\n');
 }
 
@@ -617,7 +632,7 @@ export function friendlyErrorText(err, { retryHint = false } = {}) {
     lower.includes('unauthorized') ||
     lower.includes('احراز')
   ) {
-    fa = 'نشست کارلنسر منقضی یا نامعتبر است. توکن را در سرور تازه کنید.';
+    fa = 'نشست کارلنسر منقضی یا نامعتبر است. از تنظیمات «🔐 تمدید نشست» را بزنید.';
   } else if (lower.includes('404') || lower.includes('not found')) {
     fa = 'مورد درخواستی پیدا نشد.';
   } else if (lower.includes('429') || lower.includes('rate')) {

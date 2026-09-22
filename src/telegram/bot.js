@@ -39,6 +39,14 @@ import {
 } from './ui.js';
 import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
+import {
+  beginRelogin,
+  clearReloginState,
+  getReloginState,
+  handleReloginText,
+  MSG as RELOGIN_MSG,
+  reloginCancelKeyboard,
+} from './relogin-flow.js';
 
 /**
  * Normalize owner id list from ownerChatIds and/or legacy ownerChatId.
@@ -377,9 +385,27 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
   }
 
   async function replySettings(ctx, { edit = false } = {}) {
-    const text = formatSettingsCard({ state: runtime.state });
+    const text = formatSettingsCard({
+      state: runtime.state,
+      karlancerAuth: api?.client ? Boolean(api.client.hasAuth) : null,
+    });
     const reply_markup = settingsInlineKeyboard(runtime.state);
     await editOrReply(ctx, text, { reply_markup }, { edit });
+  }
+
+  async function startReloginFlow(ctx, { edit = false } = {}) {
+    beginRelogin(ctx.chat.id);
+    const text = RELOGIN_MSG.ASK_PHONE;
+    const reply_markup = reloginCancelKeyboard();
+    if (edit && ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, { reply_markup });
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    await ctx.reply(text, { reply_markup });
   }
 
   async function replyHelp(ctx, { edit = false } = {}) {
@@ -646,6 +672,11 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     if (roomFlows) roomFlows.roomState.clearAwaitingNote(ctx.from?.id);
+    if (getReloginState(ctx.chat?.id)) {
+      clearReloginState(ctx.chat.id);
+      await ctx.reply(RELOGIN_MSG.CANCELLED, menuOpts());
+      return;
+    }
     await ctx.reply('لغو شد.', menuOpts());
   });
 
@@ -654,6 +685,29 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     if (roomFlows && (await roomFlows.maybeHandleAwaitingNote(ctx))) return;
+
+    if (getReloginState(ctx.chat?.id)) {
+      await handleReloginText({
+        ctx,
+        api,
+        envFile: hooks.envFile,
+        logInfo: (msg, fields) => {
+          try {
+            console.log(JSON.stringify({ level: 'info', msg, ...(fields || {}) }));
+          } catch {
+            /* ignore */
+          }
+        },
+        logWarn: (msg, fields) => {
+          try {
+            console.warn(JSON.stringify({ level: 'warn', msg, ...(fields || {}) }));
+          } catch {
+            /* ignore */
+          }
+        },
+      });
+      return;
+    }
 
     const action = mapMenuText(ctx.message.text);
     if (!action) return next();
@@ -729,6 +783,19 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     if (parsed.type === 'set_scan') {
       await ctx.answerCallbackQuery({ text: 'اسکن…' });
       await doScan(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_relogin') {
+      await ctx.answerCallbackQuery({ text: 'تمدید نشست…' });
+      await startReloginFlow(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_relogin_cancel') {
+      clearReloginState(ctx.chat?.id);
+      await ctx.answerCallbackQuery({ text: 'لغو شد' });
+      await ctx.reply(RELOGIN_MSG.CANCELLED, menuOpts());
       return;
     }
 

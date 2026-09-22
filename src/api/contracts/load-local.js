@@ -25,9 +25,13 @@ const schemas = {
   notifications_read: NotificationsReadPayloadSchema,
 };
 
+/** @type {string|null} */
+let _loadedFromPath = null;
+
 export function loadLocalVerifiedMutations(env = process.env) {
   const p = env.VERIFIED_MUTATION_CONFIG_PATH || 'configs/verified-mutations.local.json';
   if (!fs.existsSync(p)) return 0;
+  if (_loadedFromPath === p) return 0; // idempotent: createKarlancerApi may run more than once in-process
   let raw;
   try {
     raw = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -73,5 +77,6 @@ export function loadLocalVerifiedMutations(env = process.env) {
     n += 1;
   }
   logger.info('verified_mutations_loaded', { count: n, path: p });
+  _loadedFromPath = p;
   return n;
 }

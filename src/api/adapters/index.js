@@ -9,6 +9,7 @@ import { createBookmarksAdapter } from './bookmarks.js';
 import { createSearchAdapter } from './search.js';
 import { createFilesAdapter } from './files.js';
 import { createPlansAdapter } from './plans.js';
+import { createAuthAdapter } from './auth.js';
 import { loadLocalVerifiedMutations } from '../contracts/load-local.js';
 
 /**
@@ -29,6 +30,7 @@ export function createKarlancerApi(opts = {}) {
     search: createSearchAdapter(client),
     files: createFilesAdapter(client),
     plans: createPlansAdapter(client),
+    auth: createAuthAdapter(client),
   };
 }
 

@@ -15,7 +15,7 @@ Token format (observed): Laravel Sanctum-style `numericId|secret` (not a JWT). S
 
 | Method | Path | Body keys | Status |
 |--------|------|-----------|--------|
-| POST | `/api/login/phone` | `phone`, `password`, `role`, `unregistered_project_token`, `unregistered_service_token` | 200 |
+| POST | `/api/login/phone` | `phone`, `password`, `unregistered_project_token`, `unregistered_service_token`, `role` | 200 |
 
 Response `data` includes `access_token`, `token_type` (`Bearer`), `user`, …  
 Browser also stores `localStorage["auth-token"]` = `{ token_type, access_token, refresh_token, is_token_valid }`.  
@@ -56,3 +56,16 @@ HARs + live capture show **no** `X-XSRF-TOKEN` / `X-CSRF-TOKEN` on API calls. Be
 ## Tenant isolation
 
 MCP/worker continue to scope jobs and credentials per tenant. Tokens must never appear in logs (redaction middleware preserved).
+
+
+## Telegram re-login (owner-only)
+
+Owners can renew the session from **Settings → 🔐 تمدید نشست** without SSHing:
+
+1. Bot asks for phone, then password (in-memory conversation state, 10‑minute timeout, cancel button).
+2. Calls `POST /api/login/phone` with the live body shape above (`auth: false`).
+3. Parses `data.access_token`, hot-swaps `client.setAccessToken`, updates `process.env.KARLANCER_ACCESS_TOKEN`, and rewrites `.env` with the same safe pattern as `deploy/scripts/install-karlancer-token.sh` (never bash-source a token containing `|`).
+4. Deletes the password (and phone) Telegram messages when possible. Success text: «نشست تازه فعال شد» — **never** echoes the token.
+5. Password is never written to disk/DB/logs. Chat history may still retain copies — prefer rotating the Karlancer password if it was typed in Telegram.
+
+On API `401`/`403` from reads, owners get a rate-limited soft notify to renew from Settings.
