@@ -7,87 +7,117 @@ import {
   approvalActionKeyboard,
   statusInlineKeyboard,
   afterScanInlineKeyboard,
+  settingsInlineKeyboard,
+  homeInlineKeyboard,
   parseCallbackData,
   formatStatusCard,
   formatApprovalsList,
   formatHelp,
   formatWelcome,
+  formatSettingsCard,
   formatScanQueued,
   formatDecideResult,
+  formatLoading,
+  formatComplete,
+  friendlyErrorText,
+  formatFriendlyError,
   mapMenuText,
   formatAgeFa,
   approvalTarget,
+  deriveSystemHealth,
 } from '../../src/telegram/ui.js';
 
-test('main menu keyboard has Persian labels and is persistent/resized', () => {
+test('main menu has at most 6 Persian IA items and is persistent', () => {
   const kb = mainMenuKeyboard('running');
   assert.equal(kb.resize_keyboard, true);
   assert.equal(kb.is_persistent, true);
   const flat = kb.keyboard.flat().map((b) => b.text);
-  assert.deepEqual(flat, [BTN.STATUS, BTN.APPROVALS, BTN.CHATS, BTN.UNREAD, BTN.SCAN, BTN.PAUSE, BTN.HELP]);
-
-  const paused = mainMenuKeyboard('paused');
-  const flatP = paused.keyboard.flat().map((b) => b.text);
-  assert.ok(flatP.includes(BTN.RESUME));
-  assert.ok(!flatP.includes(BTN.PAUSE));
+  assert.deepEqual(flat, [
+    BTN.DASHBOARD,
+    BTN.CHATS,
+    BTN.ALERTS,
+    BTN.APPROVALS,
+    BTN.SETTINGS,
+    BTN.HELP,
+  ]);
+  assert.ok(flat.length <= 6);
 });
 
-test('inline approval keyboard encodes callback with id', () => {
+test('inline approval keyboard encodes callback with id and nav', () => {
   const id = '123e4567-e89b-12d3-a456-426614174000';
   const kb = approvalActionKeyboard(id);
-  const row = kb.inline_keyboard[0];
-  assert.equal(row[0].callback_data, `ok:${id}`);
-  assert.equal(row[1].callback_data, `no:${id}`);
-  assert.ok(row[0].callback_data.length <= 64);
+  const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(data.includes(`ok:${id}`));
+  assert.ok(data.includes(`no:${id}`));
+  assert.ok(data.includes('nav:home'));
+  for (const d of data) assert.ok(d.length <= 64);
 });
 
 test('status inline shows approvals link only when pending > 0', () => {
   const empty = statusInlineKeyboard({ pendingCount: 0 });
-  assert.equal(empty.inline_keyboard.length, 1);
-  assert.equal(empty.inline_keyboard[0][0].callback_data, 'refresh:status');
+  const data0 = empty.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(data0.includes('refresh:status'));
+  assert.ok(data0.includes('nav:home'));
+  assert.ok(!data0.includes('goto:approvals'));
 
   const withPending = statusInlineKeyboard({ pendingCount: 3 });
-  assert.equal(withPending.inline_keyboard.length, 2);
-  assert.equal(withPending.inline_keyboard[1][0].callback_data, 'goto:approvals');
-  assert.match(withPending.inline_keyboard[1][0].text, /3/);
-});
-
-test('afterScan inline has status callback', () => {
-  const kb = afterScanInlineKeyboard();
-  const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
-  assert.ok(data.includes('refresh:status'));
+  const data = withPending.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(data.includes('goto:approvals'));
-  assert.ok(data.includes('goto:chats'));
-  assert.ok(data.includes('goto:unread'));
 });
 
-test('parseCallbackData covers approve/reject/refresh/goto', () => {
+test('afterScan / settings / home keyboards navigate', () => {
+  const after = afterScanInlineKeyboard().inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(after.includes('refresh:status'));
+  assert.ok(after.includes('goto:approvals'));
+  assert.ok(after.includes('nav:home'));
+
+  const setRun = settingsInlineKeyboard('running').inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(setRun.includes('set:pause'));
+  assert.ok(setRun.includes('set:scan'));
+
+  const setPause = settingsInlineKeyboard('paused').inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(setPause.includes('set:resume'));
+
+  const home = homeInlineKeyboard().inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(home.includes('nav:dash'));
+  assert.ok(home.includes('nav:set'));
+});
+
+test('parseCallbackData covers approve/reject/nav/settings/pagination', () => {
   const id = '123e4567-e89b-12d3-a456-426614174000';
   assert.deepEqual(parseCallbackData(`ok:${id}`), { type: 'approve', approvalId: id });
   assert.deepEqual(parseCallbackData(`no:${id}`), { type: 'reject', approvalId: id });
   assert.deepEqual(parseCallbackData('refresh:status'), { type: 'refresh_status' });
   assert.deepEqual(parseCallbackData('goto:approvals'), { type: 'goto_approvals' });
   assert.deepEqual(parseCallbackData('goto:chats'), { type: 'goto_chats' });
+  assert.deepEqual(parseCallbackData('nav:home'), { type: 'nav_home' });
+  assert.deepEqual(parseCallbackData('nav:set'), { type: 'nav_settings' });
+  assert.deepEqual(parseCallbackData('set:scan'), { type: 'set_scan' });
+  assert.deepEqual(parseCallbackData('page:chats:2'), { type: 'page_chats', page: 2 });
+  assert.deepEqual(parseCallbackData('page:unrd:1'), { type: 'page_unread', page: 1 });
   assert.deepEqual(parseCallbackData('room:open:7241431'), { type: 'room_open', roomId: '7241431' });
+  assert.deepEqual(parseCallbackData('room:cfm:9'), { type: 'room_confirm_send', roomId: '9' });
   assert.equal(parseCallbackData('evil:payload'), null);
   assert.equal(parseCallbackData(''), null);
   assert.equal(parseCallbackData(null), null);
 });
 
-test('mapMenuText maps reply labels', () => {
-  assert.equal(mapMenuText(BTN.STATUS), 'status');
-  assert.equal(mapMenuText(BTN.APPROVALS), 'approvals');
+test('mapMenuText maps new IA and legacy labels', () => {
+  assert.equal(mapMenuText(BTN.DASHBOARD), 'dashboard');
+  assert.equal(mapMenuText(BTN.STATUS), 'dashboard');
   assert.equal(mapMenuText(BTN.CHATS), 'chats');
-  assert.equal(mapMenuText(BTN.UNREAD), 'unread');
-  assert.equal(mapMenuText(BTN.SCAN), 'scan');
-  assert.equal(mapMenuText(BTN.PAUSE), 'pause');
-  assert.equal(mapMenuText(BTN.RESUME), 'resume');
+  assert.equal(mapMenuText(BTN.CHATS_LEGACY), 'chats');
+  assert.equal(mapMenuText(BTN.ALERTS), 'alerts');
+  assert.equal(mapMenuText(BTN.UNREAD), 'alerts');
+  assert.equal(mapMenuText(BTN.APPROVALS), 'approvals');
+  assert.equal(mapMenuText(BTN.SETTINGS), 'settings');
   assert.equal(mapMenuText(BTN.HELP), 'help');
+  assert.equal(mapMenuText(BTN.SCAN), 'scan');
   assert.equal(mapMenuText('/status'), null);
   assert.equal(mapMenuText('random'), null);
 });
 
-test('formatStatusCard is Persian and redacts secrets in lastError', () => {
+test('formatStatusCard is System Healthy style and redacts secrets', () => {
   const text = formatStatusCard({
     state: 'running',
     pendingApprovals: 2,
@@ -95,19 +125,24 @@ test('formatStatusCard is Persian and redacts secrets in lastError', () => {
     running: 0,
     waitingApproval: 2,
     karlancerAuth: true,
+    pollOk: true,
     db: 'up',
     worker: 'idle',
     lastError: 'Bearer abcdefghijklmnop secret',
   });
-  assert.match(text, /وضعیت ایجنت/);
-  assert.match(text, /کارلنسر: متصل/);
-  assert.match(text, /\[REDACTED\]/);
+  assert.match(text, /داشبورد عملیات/);
+  assert.match(text, /سیستم سالم|هشدار/);
+  assert.match(text, /کارلنسر: ✅ متصل/);
   assert.doesNotMatch(text, /abcdefghijklmnop/);
+  assert.doesNotMatch(text, /Bearer/i);
+  assert.match(text, /آخرین خطا/);
+  assert.equal(deriveSystemHealth({ karlancerAuth: true, pollOk: true, state: 'running' }), 'healthy');
+  assert.equal(deriveSystemHealth({ karlancerAuth: false }), 'down');
 });
 
 test('formatApprovalsList empty and non-empty', () => {
   const empty = formatApprovalsList([]);
-  assert.match(empty.text, /تأییدی در صف نیست/);
+  assert.match(empty.text, /صف تأیید خالی/);
   assert.equal(empty.keyboards.length, 0);
 
   const id = '123e4567-e89b-12d3-a456-426614174000';
@@ -122,7 +157,6 @@ test('formatApprovalsList empty and non-empty', () => {
   assert.match(list.text, /bids\.submit/);
   assert.match(list.text, /42/);
   assert.equal(list.keyboards.length, 1);
-  assert.equal(list.keyboards[0].inline_keyboard[0][0].callback_data, `ok:${id}`);
 });
 
 test('approvalTarget extracts projectId safely', () => {
@@ -134,18 +168,26 @@ test('approvalTarget extracts projectId safely', () => {
   assert.equal(t.target, 'r9');
 });
 
-test('help mentions buttons before slash commands', () => {
+test('help / welcome / settings / loading / friendly errors', () => {
   const h = formatHelp();
-  const btnIdx = h.indexOf('دکمه‌های منو');
-  const slashIdx = h.indexOf('دستورات پیشرفته');
-  assert.ok(btnIdx >= 0 && slashIdx > btnIdx);
-  assert.match(formatWelcome(), /منوی پایین/);
-  assert.match(formatScanQueued('abcdefgh-ijkl'), /اسکن/);
+  assert.match(h, /منوی اصلی/);
+  assert.match(h, /داشبورد/);
+  assert.match(formatWelcome(), /Operations Dashboard|داشبورد/);
+  assert.match(formatSettingsCard({ state: 'paused' }), /مکث/);
+  assert.match(formatScanQueued('abcdefgh-ijkl'), /اسکن|صف/);
   assert.match(formatDecideResult({ approve: true, approvalId: 'abcdefgh', jobStatus: 'queued' }), /تأیید شد/);
+  assert.match(formatLoading('ai'), /تحلیل/);
+  assert.match(formatComplete('send'), /تأیید ثبت شد|✅/);
+  assert.match(friendlyErrorText(new Error('AxiosError: timeout of 5000ms exceeded')), /طولانی|تلاش/);
+  assert.doesNotMatch(friendlyErrorText('Bearer SECRETTOKEN123'), /SECRETTOKEN123/);
+  const fe = formatFriendlyError('network fail', { retryCallback: 'goto:chats' });
+  assert.match(fe.text, /خطا|مشکل|ارتباط/);
+  assert.ok(fe.keyboard.inline_keyboard.flat().some((b) => b.callback_data === 'goto:chats'));
 });
 
-test('formatAgeFa and BOT_COMMANDS', () => {
+test('formatAgeFa and BOT_COMMANDS match IA', () => {
   assert.equal(formatAgeFa(new Date().toISOString()), 'همین الان');
   assert.ok(BOT_COMMANDS.some((c) => c.command === 'status'));
+  assert.ok(BOT_COMMANDS.some((c) => /داشبورد|سلامت/.test(c.description)));
   assert.ok(BOT_COMMANDS.every((c) => typeof c.description === 'string' && c.description.length > 0));
 });

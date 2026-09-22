@@ -1,5 +1,5 @@
 /**
- * Per-chat Telegram control flows (list / open / approve / reject / note / AI).
+ * Per-chat Telegram control flows (list / open / confirm-send / reject / note / AI).
  * Sending is API-driven via VerifiedMutationContract — never LLM.
  */
 import crypto from 'node:crypto';
@@ -9,9 +9,17 @@ import { getVerifiedMutation } from '../api/contracts/verified-mutation.js';
 import {
   formatRoomCard,
   formatRoomsList,
+  formatSendConfirmPreview,
+  formatAiAnalysisCard,
   roomCardKeyboard,
+  roomConfirmKeyboard,
 } from './room-card.js';
-import { redactString } from '../security/redaction.js';
+import {
+  formatLoading,
+  formatComplete,
+  formatFriendlyError,
+  friendlyErrorText,
+} from './ui.js';
 
 /**
  * @param {object} deps
@@ -29,39 +37,55 @@ export function createRoomFlows(deps) {
     return Boolean(getVerifiedMutation('messages.send'));
   }
 
+  async function editOrReply(ctx, text, extra = {}, { edit = false } = {}) {
+    if (edit && ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, extra);
+        return 'edited';
+      } catch {
+        /* fall through */
+      }
+    }
+    await ctx.reply(text, { ...menuOpts(), ...extra });
+    return 'replied';
+  }
+
   async function listRoomsFromApi({ unreadOnly = false } = {}) {
     if (!api?.client?.hasAuth) {
-      return { ok: false, error: 'کارلنسر احراز هویت نشده.' };
+      return { ok: false, error: 'نشست کارلنسر فعال نیست. توکن سرور را بررسی کنید.' };
     }
-    const { rooms } = await api.rooms.list({ page: 1 });
-    let list = (rooms || []).map((r) => ({
-      id: r.id,
-      roomId: r.id,
-      guestName: r.guestName || r.title,
-      unread: Number(r.unread) || 0,
-      lastMessage: r.lastMessage,
-      updatedAt: r.updatedAt,
-    }));
-    if (unreadOnly) list = list.filter((r) => r.unread > 0);
-    // Also include pending decision rooms from kv
-    if (!unreadOnly) {
-      for (const id of roomState.listPendingRoomIds()) {
-        if (!list.some((r) => String(r.id) === String(id))) {
-          const card = roomState.getCard(id);
-          if (card) {
-            list.unshift({
-              id,
-              roomId: id,
-              guestName: card.guestName,
-              unread: card.unread || 0,
-              lastMessage: card.messages?.slice(-1)?.[0]?.text || '',
-              updatedAt: card.updatedAt,
-            });
+    try {
+      const { rooms } = await api.rooms.list({ page: 1 });
+      let list = (rooms || []).map((r) => ({
+        id: r.id,
+        roomId: r.id,
+        guestName: r.guestName || r.title,
+        unread: Number(r.unread) || 0,
+        lastMessage: r.lastMessage,
+        updatedAt: r.updatedAt,
+      }));
+      if (unreadOnly) list = list.filter((r) => r.unread > 0);
+      if (!unreadOnly) {
+        for (const id of roomState.listPendingRoomIds()) {
+          if (!list.some((r) => String(r.id) === String(id))) {
+            const card = roomState.getCard(id);
+            if (card) {
+              list.unshift({
+                id,
+                roomId: id,
+                guestName: card.guestName,
+                unread: card.unread || 0,
+                lastMessage: card.messages?.slice(-1)?.[0]?.text || '',
+                updatedAt: card.updatedAt,
+              });
+            }
           }
         }
       }
+      return { ok: true, rooms: list };
+    } catch (e) {
+      return { ok: false, error: friendlyErrorText(e) };
     }
-    return { ok: true, rooms: list };
   }
 
   async function buildFreshCard(roomId) {
@@ -70,35 +94,40 @@ export function createRoomFlows(deps) {
       if (cached) return { ...cached, sendApiLive: sendApiLive() };
       return null;
     }
-    // Reuse poll for one room
-    const { runMessagesPoll } = await import('../agent/messages-poll.js');
-    const out = await runMessagesPoll({ api, db, roomState }, { roomId, page: 1 });
-    if (out.ok && out.result?.cards?.length) {
-      return out.result.cards[0];
+    try {
+      const { runMessagesPoll } = await import('../agent/messages-poll.js');
+      const out = await runMessagesPoll({ api, db, roomState }, { roomId, page: 1 });
+      if (out.ok && out.result?.cards?.length) {
+        return out.result.cards[0];
+      }
+      return roomState.getCard(roomId);
+    } catch {
+      return roomState.getCard(roomId);
     }
-    return roomState.getCard(roomId);
   }
 
-  async function replyRoomsList(ctx, { unreadOnly = false, edit = false } = {}) {
-    const title = unreadOnly ? '🔴 خوانده‌نشده' : '💬 چت‌ها';
+  async function replyRoomsList(ctx, { unreadOnly = false, edit = false, page = 1 } = {}) {
+    const title = unreadOnly ? '🔔 هشدارها · خوانده‌نشده' : '💬 گفتگوها';
     const res = await listRoomsFromApi({ unreadOnly });
     if (!res.ok) {
-      await ctx.reply(res.error, menuOpts());
+      const { text, keyboard } = formatFriendlyError(res.error, {
+        title: '⚠️ دریافت گفتگوها',
+        retryCallback: unreadOnly ? 'goto:unread' : 'goto:chats',
+      });
+      await editOrReply(ctx, text, { reply_markup: keyboard }, { edit });
       return;
     }
-    const { text, items } = formatRoomsList(res.rooms, { title, max: 10 });
-    if (edit && ctx.callbackQuery) {
-      try {
-        await ctx.editMessageText(text);
-      } catch {
-        await ctx.reply(text, menuOpts());
-      }
-    } else {
-      await ctx.reply(text, menuOpts());
-    }
-    for (const item of items.slice(0, 10)) {
-      await ctx.reply(`اتاق #${item.roomId}`, { reply_markup: item.keyboard });
-    }
+    const formatted = formatRoomsList(res.rooms, {
+      title,
+      page,
+      unreadOnly,
+    });
+    await editOrReply(
+      ctx,
+      formatted.text,
+      { reply_markup: formatted.keyboard },
+      { edit }
+    );
   }
 
   async function replyRoomCard(ctx, roomId, { edit = false } = {}) {
@@ -107,16 +136,11 @@ export function createRoomFlows(deps) {
       card = roomState.getCard(roomId);
     }
     if (!card) {
-      const msg = `کارت اتاق #${roomId} پیدا نشد. اول «خوانده‌نشده» یا poll را بزنید.`;
-      if (edit && ctx.callbackQuery) {
-        try {
-          await ctx.editMessageText(msg);
-          return;
-        } catch {
-          /* fall through */
-        }
-      }
-      await ctx.reply(msg, menuOpts());
+      const { text, keyboard } = formatFriendlyError(
+        `گفتگوی #${roomId} پیدا نشد. اول هشدارها یا اسکن را بزنید.`,
+        { title: '⚠️ گفتگو', retryCallback: 'goto:chats' }
+      );
+      await editOrReply(ctx, text, { reply_markup: keyboard }, { edit });
       return;
     }
     card.sendApiLive = sendApiLive();
@@ -125,17 +149,47 @@ export function createRoomFlows(deps) {
     card.ownerNote = roomState.getNote(roomId)?.text || card.ownerNote;
     const text = formatRoomCard(card);
     const kb = roomCardKeyboard(roomId);
-    if (edit && ctx.callbackQuery) {
-      try {
-        await ctx.editMessageText(text, { reply_markup: kb });
-        return;
-      } catch {
-        /* fall through */
-      }
-    }
-    await ctx.reply(text, { ...menuOpts(), reply_markup: kb });
+    await editOrReply(ctx, text, { reply_markup: kb }, { edit });
   }
 
+  /**
+   * Step 1 of send: show confirmation preview (does not queue job yet).
+   */
+  async function showSendConfirm(ctx, roomId) {
+    const draft = roomState.getDraft(roomId);
+    const cached = roomState.getCard(roomId) || {};
+    const text = draft?.text || cached.draftText || '';
+    if (!text.trim()) {
+      await editOrReply(
+        ctx,
+        [
+          '📝 پیش‌نویس خالی است',
+          '————————',
+          '',
+          'اول نوت یا خلاصه AI بزنید، بعد تأیید ارسال.',
+        ].join('\n'),
+        { reply_markup: roomCardKeyboard(roomId) },
+        { edit: true }
+      );
+      return;
+    }
+    const preview = formatSendConfirmPreview({
+      roomId,
+      guestName: cached.guestName,
+      draftText: text,
+      sendApiLive: sendApiLive(),
+    });
+    await editOrReply(
+      ctx,
+      preview,
+      { reply_markup: roomConfirmKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) }
+    );
+  }
+
+  /**
+   * Step 2 of send: after Confirm — create job (honest about blocked_by_missing_api).
+   */
   async function approveSend(ctx, roomId) {
     const draft = roomState.getDraft(roomId);
     const text = draft?.text || roomState.getCard(roomId)?.draftText || '';
@@ -145,12 +199,14 @@ export function createRoomFlows(deps) {
     }
 
     if (!queue) {
-      await ctx.reply('صف job وصل نیست.', menuOpts());
+      const { text: errText, keyboard } = formatFriendlyError('صف job وصل نیست.', {
+        retryCallback: `room:cfm:${roomId}`,
+      });
+      await ctx.reply(errText, { ...menuOpts(), reply_markup: keyboard });
       return;
     }
 
     const live = sendApiLive();
-    // Create messages.send with requiresApproval, then immediately approve (owner already clicked)
     const job = queue.create({
       goal: 'messages.send',
       requiresApproval: true,
@@ -180,38 +236,47 @@ export function createRoomFlows(deps) {
       return;
     }
 
-    roomState.setDecision(roomId, { status: live ? 'approved' : 'blocked', detail: live ? null : 'blocked_by_missing_api' });
+    roomState.setDecision(roomId, {
+      status: live ? 'approved' : 'blocked',
+      detail: live ? null : 'blocked_by_missing_api',
+    });
 
     if (!live) {
-      // Worker will also mark needs_reconciliation; be honest in Telegram now
-      await ctx.reply(
-        [
-          `✅ تأیید ثبت شد برای اتاق #${roomId}`,
-          '⛔ ارسال واقعی: blocked_by_missing_api',
-          'Job در وضعیت needs_reconciliation صف می‌شود تا قرارداد VerifiedMutation ثبت شود.',
-          'پیش‌نویس محفوظ است — بعد از ثبت API دوباره تأیید کنید.',
-        ].join('\n'),
-        menuOpts()
+      const msg = [
+        formatComplete('send'),
+        '————————',
+        `اتاق #${roomId}`,
+        '⛔ ارسال واقعی: blocked_by_missing_api',
+        'Job در needs_reconciliation می‌ماند تا قرارداد API ثبت شود.',
+        'پیش‌نویس محفوظ است.',
+      ].join('\n');
+      await editOrReply(
+        ctx,
+        msg,
+        { reply_markup: roomCardKeyboard(roomId) },
+        { edit: Boolean(ctx.callbackQuery) }
       );
       return;
     }
 
-    await ctx.reply(
-      [
-        `✅ تأیید شد — ارسال در صف worker`,
-        `اتاق: #${roomId}`,
-        `job: ${String(job.jobId).slice(0, 8)}…`,
-        decided?.job?.status ? `وضعیت: ${decided.job.status}` : null,
-      ]
-        .filter(Boolean)
-        .join('\n'),
-      menuOpts()
+    const msg = [
+      formatComplete('send', 'ارسال در صف worker قرار گرفت.'),
+      `اتاق: #${roomId}`,
+      `job: ${String(job.jobId).slice(0, 8)}…`,
+      decided?.job?.status ? `وضعیت: ${decided.job.status}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    await editOrReply(
+      ctx,
+      msg,
+      { reply_markup: roomCardKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) }
     );
   }
 
   async function rejectRoom(ctx, roomId) {
     roomState.setDecision(roomId, { status: 'rejected' });
-    // Cancel any pending messages.send for this room
     if (queue) {
       const pending = queue.pendingApprovals();
       for (const a of pending) {
@@ -230,13 +295,28 @@ export function createRoomFlows(deps) {
         }
       }
     }
-    await ctx.reply(`❌ اتاق #${roomId} رد شد. پیش‌نویس ارسال نمی‌شود.`, menuOpts());
+    await editOrReply(
+      ctx,
+      [
+        formatComplete('reject'),
+        `گفتگوی #${roomId} رد شد.`,
+        'پیش‌نویس ارسال نمی‌شود.',
+      ].join('\n'),
+      { reply_markup: roomCardKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) }
+    );
   }
 
   async function startNoteFlow(ctx, roomId) {
     roomState.setAwaitingNote(ctx.from?.id, roomId);
     await ctx.reply(
-      `📝 نوت برای اتاق #${roomId}\nمتن راهنما را در پیام بعدی بفرستید (فقط همین چت).\nبرای لغو: /cancel`,
+      [
+        `📝 نوت برای گفتگوی #${roomId}`,
+        '————————',
+        '',
+        'متن راهنما را در پیام بعدی بفرستید.',
+        'برای لغو: /cancel',
+      ].join('\n'),
       menuOpts()
     );
   }
@@ -247,7 +327,7 @@ export function createRoomFlows(deps) {
     const card = roomState.getCard(roomId) || { roomId };
     const current = roomState.getDraft(roomId)?.text || card.draftText || '';
 
-    await ctx.reply('در حال اعمال نوت (تحلیل AI در صورت فعال بودن)…', menuOpts());
+    await ctx.reply(formatLoading('note'), menuOpts());
 
     const adapted = await adaptDraftWithNote({
       roomContext: {
@@ -278,11 +358,10 @@ export function createRoomFlows(deps) {
     });
 
     await ctx.reply(
-      [
-        `نوت اعمال شد (منبع: ${adapted.source}${adapted.llmUsed ? ' · AI' : ' · بدون AI'})`,
-        '',
-        'کارت به‌روز:',
-      ].join('\n'),
+      formatComplete(
+        'note',
+        `منبع: ${adapted.source}${adapted.llmUsed ? ' · AI' : ' · بدون AI'}`
+      ),
       menuOpts()
     );
     await replyRoomCard(ctx, roomId);
@@ -290,12 +369,33 @@ export function createRoomFlows(deps) {
 
   async function runAiAnalyze(ctx, roomId) {
     const card = roomState.getCard(roomId) || (await buildFreshCard(roomId)) || { roomId };
-    await ctx.reply('🤖 در حال تحلیل AI…', menuOpts());
-    const analysis = await analyzeRoomWithLlm({
-      roomContext: { project: card.project, guestName: card.guestName },
-      llm,
-    });
-    // Also polish draft if we have messages
+    if (ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(formatLoading('ai'), {
+          reply_markup: roomCardKeyboard(roomId),
+        });
+      } catch {
+        await ctx.reply(formatLoading('ai'), menuOpts());
+      }
+    } else {
+      await ctx.reply(formatLoading('ai'), menuOpts());
+    }
+
+    let analysis;
+    try {
+      analysis = await analyzeRoomWithLlm({
+        roomContext: { project: card.project, guestName: card.guestName },
+        llm,
+      });
+    } catch (e) {
+      const { text, keyboard } = formatFriendlyError(e, {
+        title: '⚠️ تحلیل AI',
+        retryCallback: `room:ai:${roomId}`,
+      });
+      await editOrReply(ctx, text, { reply_markup: keyboard }, { edit: true });
+      return;
+    }
+
     const adapted = await adaptDraftWithNote({
       roomContext: {
         roomId,
@@ -308,25 +408,27 @@ export function createRoomFlows(deps) {
       llm,
       mode: 'analyze',
     });
+    let draftUpdated = false;
     if (adapted.text) {
       roomState.setDraft(roomId, { text: adapted.text, source: adapted.source });
       roomState.setDecision(roomId, { status: 'pending' });
+      draftUpdated = true;
     }
-    await ctx.reply(
-      [
-        analysis.ok ? `📊 خلاصه تحلیل:\n${redactString(analysis.summary).slice(0, 1200)}` : `📊 ${analysis.summary}`,
-        '',
-        adapted.llmUsed ? 'پیش‌نویس با AI به‌روز شد.' : 'پیش‌نویس با قالب/نوت به‌روز شد (AI در دسترس نبود).',
-      ].join('\n'),
-      menuOpts()
+
+    const cardText = formatAiAnalysisCard(analysis, { roomId, draftUpdated });
+    await editOrReply(
+      ctx,
+      cardText,
+      { reply_markup: roomCardKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) }
     );
-    await replyRoomCard(ctx, roomId);
   }
 
   return {
     roomState,
     replyRoomsList,
     replyRoomCard,
+    showSendConfirm,
     approveSend,
     rejectRoom,
     startNoteFlow,

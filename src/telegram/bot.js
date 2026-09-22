@@ -4,14 +4,18 @@ import {
   mainMenuKeyboard,
   statusInlineKeyboard,
   afterScanInlineKeyboard,
+  settingsInlineKeyboard,
+  homeInlineKeyboard,
   approvalActionKeyboard,
   parseCallbackData,
   formatStatusCard,
   formatApprovalsList,
   formatWelcome,
   formatHelp,
+  formatSettingsCard,
   formatScanQueued,
   formatDecideResult,
+  formatFriendlyError,
   mapMenuText,
   formatAgeFa,
   approvalTarget,
@@ -20,12 +24,12 @@ import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
 
 /**
- * Owner-only Telegram control plane with reply + inline keyboards.
+ * Owner-only Telegram AI Operations Dashboard.
  *
  * @param {object} opts
  * @param {string} opts.token
  * @param {number|null} opts.ownerChatId
- * @param {{ queue?: object, onStatus?: Function }} [opts.hooks]
+ * @param {{ queue?: object, onStatus?: Function, db?: object, api?: object, llm?: object }} [opts.hooks]
  */
 export function createBot({ token, ownerChatId, hooks = {} }) {
   const bot = new Bot(token);
@@ -82,6 +86,18 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       ? createRoomFlows({ db, queue, api, llm, menuOpts })
       : null;
 
+  async function editOrReply(ctx, text, extra = {}, { edit = false } = {}) {
+    if (edit && ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(text, extra);
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    await ctx.reply(text, { ...menuOpts(), ...extra });
+  }
+
   async function collectStatus() {
     const pending = pendingCount();
     let queued = 0;
@@ -94,7 +110,9 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       waitingApproval = queue.list({ status: 'waiting_for_approval', limit: 50 }).length;
       try {
         const recent = queue.list({ limit: 15 });
-        const failed = recent.find((j) => j.errorCode || j.status === 'failed' || j.status === 'dead_letter');
+        const failed = recent.find(
+          (j) => j.errorCode || j.status === 'failed' || j.status === 'dead_letter'
+        );
         if (failed?.errorCode) lastError = String(failed.errorCode);
       } catch {
         /* ignore */
@@ -147,12 +165,17 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
           if (dbLine) card.db = dbLine[1].trim();
           const workerLine = raw.match(/^worker:\s*(.+)$/im);
           if (workerLine) card.worker = workerLine[1].trim();
-          // Keep only non-duplicated lines as extra footnotes
           const keep = raw
             .split('\n')
             .filter((l) => {
               const s = l.trim().toLowerCase();
-              return s && !s.startsWith('db:') && !s.startsWith('worker:') && !s.startsWith('karlancer_auth:') && !s.startsWith('queue_depth:');
+              return (
+                s &&
+                !s.startsWith('db:') &&
+                !s.startsWith('worker:') &&
+                !s.startsWith('karlancer_auth:') &&
+                !s.startsWith('queue_depth:')
+              );
             })
             .join('\n');
           if (keep) card.extra = redactString(keep);
@@ -174,141 +197,125 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     return card;
   }
 
+  async function replyHome(ctx, { edit = false } = {}) {
+    const card = await collectStatus();
+    const text = formatWelcome({
+      karlancerAuth: card.karlancerAuth,
+      lastScanAt: card.lastScanAt,
+      pendingApprovals: card.pendingApprovals,
+    });
+    await editOrReply(ctx, text, { reply_markup: homeInlineKeyboard() }, { edit });
+  }
+
   async function replyStatus(ctx, { edit = false } = {}) {
     const card = await collectStatus();
     const text = formatStatusCard(card);
     const reply_markup = statusInlineKeyboard({ pendingCount: card.pendingApprovals });
-    if (edit && ctx.callbackQuery) {
-      try {
-        await ctx.editMessageText(text, { reply_markup });
-        return;
-      } catch {
-        /* fall through to new message */
-      }
-    }
-    await ctx.reply(text, { ...menuOpts(), reply_markup });
+    await editOrReply(ctx, text, { reply_markup }, { edit });
+  }
+
+  async function replySettings(ctx, { edit = false } = {}) {
+    const text = formatSettingsCard({ state: runtime.state });
+    const reply_markup = settingsInlineKeyboard(runtime.state);
+    await editOrReply(ctx, text, { reply_markup }, { edit });
+  }
+
+  async function replyHelp(ctx, { edit = false } = {}) {
+    await editOrReply(
+      ctx,
+      formatHelp(),
+      {
+        reply_markup: homeInlineKeyboard(),
+      },
+      { edit }
+    );
   }
 
   async function replyApprovals(ctx, { edit = false } = {}) {
     if (!queue) {
-      const msg = 'صف job وصل نیست.';
-      if (edit && ctx.callbackQuery) {
-        try {
-          await ctx.editMessageText(msg);
-          return;
-        } catch {
-          /* fall through */
-        }
-      }
-      await ctx.reply(msg, menuOpts());
+      const { text, keyboard } = formatFriendlyError('صف job وصل نیست.', {
+        retryCallback: 'goto:approvals',
+      });
+      await editOrReply(ctx, text, { reply_markup: keyboard }, { edit });
       return;
     }
     const pending = queue.pendingApprovals();
     const { text, keyboards } = formatApprovalsList(pending);
     if (!pending.length) {
-      if (edit && ctx.callbackQuery) {
-        try {
-          await ctx.editMessageText(text, {
-            reply_markup: statusInlineKeyboard({ pendingCount: 0 }),
-          });
-          return;
-        } catch {
-          /* fall through */
-        }
-      }
-      await ctx.reply(text, menuOpts());
+      await editOrReply(
+        ctx,
+        text,
+        { reply_markup: statusInlineKeyboard({ pendingCount: 0 }) },
+        { edit }
+      );
       return;
     }
-    // First approval: edit or send with its inline buttons; rest as follow-ups
     const firstKb = keyboards[0];
-    if (edit && ctx.callbackQuery) {
-      try {
-        // When editing, show a summary + first item actions only in one message
-        const a = pending[0];
-        const { action, target } = approvalTarget(a);
-        const summary = [
-          `📋 تأییدهای در انتظار (${pending.length})`,
-          '',
-          `🧾 مورد اول`,
-          `• عمل: ${action}`,
-          `• هدف: ${target}`,
-          `• سن: ${formatAgeFa(a.created_at)}`,
-          `• شناسه: ${String(a.approval_id).slice(0, 8)}…`,
-          pending.length > 1 ? `\nبقیه موارد در پیام‌های بعدی.` : '',
-        ]
-          .filter(Boolean)
-          .join('\n');
-        await ctx.editMessageText(summary, { reply_markup: firstKb });
-      } catch {
-        await ctx.reply(
-          [
-            `📋 تأییدهای در انتظار (${pending.length})`,
-            '',
-            (() => {
-              const { action, target } = approvalTarget(pending[0]);
-              return [
-                `🧾 مورد ۱`,
-                `• عمل: ${action}`,
-                `• هدف: ${target}`,
-                `• سن: ${formatAgeFa(pending[0].created_at)}`,
-              ].join('\n');
-            })(),
-          ].join('\n'),
-          { ...menuOpts(), reply_markup: firstKb }
-        );
-      }
-    } else {
-      await ctx.reply(
-        [
-          `📋 تأییدهای در انتظار (${pending.length})`,
-          '',
-          (() => {
-            const { action, target } = approvalTarget(pending[0]);
-            return [
-              `🧾 مورد ۱`,
-              `• عمل: ${action}`,
-              `• هدف: ${target}`,
-              `• سن: ${formatAgeFa(pending[0].created_at)}`,
-              `• شناسه: ${String(pending[0].approval_id).slice(0, 8)}…`,
-            ].join('\n');
-          })(),
-        ].join('\n'),
-        { ...menuOpts(), reply_markup: firstKb }
-      );
-    }
+    const a = pending[0];
+    const { action, target } = approvalTarget(a);
+    const summary = [
+      `📋 تأییدهای در انتظار (${pending.length})`,
+      '————————',
+      '',
+      `🧾 مورد اول`,
+      `• عمل: ${action}`,
+      `• هدف: ${target}`,
+      `• سن: ${formatAgeFa(a.created_at)}`,
+      `• شناسه: ${String(a.approval_id).slice(0, 8)}…`,
+      pending.length > 1 ? `\nبقیه موارد در پیام‌های بعدی.` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    await editOrReply(ctx, summary, { reply_markup: firstKb }, { edit });
     for (let i = 1; i < Math.min(pending.length, 8); i++) {
-      const a = pending[i];
-      const { action, target } = approvalTarget(a);
+      const item = pending[i];
+      const t = approvalTarget(item);
       await ctx.reply(
         [
           `🧾 مورد ${i + 1}`,
-          `• عمل: ${action}`,
-          `• هدف: ${target}`,
-          `• سن: ${formatAgeFa(a.created_at)}`,
-          `• شناسه: ${String(a.approval_id).slice(0, 8)}…`,
+          `• عمل: ${t.action}`,
+          `• هدف: ${t.target}`,
+          `• سن: ${formatAgeFa(item.created_at)}`,
+          `• شناسه: ${String(item.approval_id).slice(0, 8)}…`,
         ].join('\n'),
-        { reply_markup: approvalActionKeyboard(a.approval_id) }
+        { reply_markup: approvalActionKeyboard(item.approval_id) }
       );
     }
   }
 
-  async function doPause(ctx) {
+  async function doPause(ctx, { edit = false } = {}) {
     runtime.state = 'paused';
-    await ctx.reply('⏸ ایجنت روی مکث است. برای ادامه «ادامه» را بزنید.', menuOpts());
+    if (edit) {
+      await replySettings(ctx, { edit: true });
+      return;
+    }
+    await ctx.reply('⏸ ایجنت روی مکث است. از تنظیمات «ادامه» را بزنید.', menuOpts());
   }
 
-  async function doResume(ctx) {
+  async function doResume(ctx, { edit = false } = {}) {
     runtime.state = 'running';
-    await ctx.reply('▶️ ایجنت دوباره در حال اجراست.', menuOpts());
+    if (edit) {
+      await replySettings(ctx, { edit: true });
+      return;
+    }
+    await ctx.reply('▶️ ایجنت دوباره فعال است.', menuOpts());
   }
 
-  async function doScan(ctx) {
+  async function doScan(ctx, { edit = false } = {}) {
     if (!queue) {
-      await ctx.reply('صف job وصل نیست.', menuOpts());
+      const { text, keyboard } = formatFriendlyError('صف job وصل نیست.', {
+        retryCallback: 'set:scan',
+      });
+      await editOrReply(ctx, text, { reply_markup: keyboard }, { edit });
       return;
     }
     if (runtime.state === 'paused') {
-      await ctx.reply('ایجنت روی مکث است — اول «ادامه» را بزنید.', menuOpts());
+      await editOrReply(
+        ctx,
+        'ایجنت روی مکث است — اول از تنظیمات «ادامه» را بزنید.',
+        { reply_markup: settingsInlineKeyboard('paused') },
+        { edit }
+      );
       return;
     }
     const job = queue.create({
@@ -316,16 +323,17 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       requestedBy: `telegram:${ctx.from?.id}`,
       payload: { page: 1 },
     });
-    await ctx.reply(formatScanQueued(job.jobId), {
-      ...menuOpts(),
-      reply_markup: afterScanInlineKeyboard(),
-    });
+    await editOrReply(
+      ctx,
+      formatScanQueued(job.jobId),
+      { reply_markup: afterScanInlineKeyboard() },
+      { edit }
+    );
   }
 
   async function decide(ctx, approve, approvalIdHint) {
     if (!queue) {
-      await ctx.reply('صف job وصل نیست.', menuOpts());
-      return null;
+      return { ok: false, text: 'صف job وصل نیست.' };
     }
     const arg =
       approvalIdHint ||
@@ -372,20 +380,13 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       );
       return;
     }
-    const card = await collectStatus();
-    await ctx.reply(
-      formatWelcome({
-        karlancerAuth: card.karlancerAuth,
-        lastScanAt: card.lastScanAt,
-      }),
-      menuOpts()
-    );
+    await replyHome(ctx);
   });
 
   bot.command('help', async (ctx) => {
     if (await denyIfNotOwner(ctx)) return;
     touch();
-    await ctx.reply(formatHelp(), menuOpts());
+    await replyHelp(ctx);
   });
 
   bot.command('status', async (ctx) => {
@@ -436,7 +437,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     if (!roomFlows) {
-      await ctx.reply('room flows در دسترس نیست (db).', menuOpts());
+      await ctx.reply('گفتگوها در دسترس نیست (db).', menuOpts());
       return;
     }
     await roomFlows.replyRoomsList(ctx, { unreadOnly: false });
@@ -446,7 +447,7 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     if (!roomFlows) {
-      await ctx.reply('room flows در دسترس نیست (db).', menuOpts());
+      await ctx.reply('هشدارها در دسترس نیست (db).', menuOpts());
       return;
     }
     await roomFlows.replyRoomsList(ctx, { unreadOnly: true });
@@ -463,25 +464,25 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
   bot.on('message:text', async (ctx, next) => {
     if (await denyIfNotOwner(ctx)) return;
     touch();
-    // Note flow takes priority over menu buttons when awaiting
     if (roomFlows && (await roomFlows.maybeHandleAwaitingNote(ctx))) return;
 
     const action = mapMenuText(ctx.message.text);
     if (!action) return next();
-    if (action === 'status') return replyStatus(ctx);
+    if (action === 'dashboard' || action === 'status') return replyStatus(ctx);
     if (action === 'approvals') return replyApprovals(ctx);
     if (action === 'chats') {
-      if (!roomFlows) return ctx.reply('room flows در دسترس نیست.', menuOpts());
+      if (!roomFlows) return ctx.reply('گفتگوها در دسترس نیست.', menuOpts());
       return roomFlows.replyRoomsList(ctx, { unreadOnly: false });
     }
-    if (action === 'unread') {
-      if (!roomFlows) return ctx.reply('room flows در دسترس نیست.', menuOpts());
+    if (action === 'alerts' || action === 'unread') {
+      if (!roomFlows) return ctx.reply('هشدارها در دسترس نیست.', menuOpts());
       return roomFlows.replyRoomsList(ctx, { unreadOnly: true });
     }
+    if (action === 'settings') return replySettings(ctx);
     if (action === 'scan') return doScan(ctx);
     if (action === 'pause') return doPause(ctx);
     if (action === 'resume') return doResume(ctx);
-    if (action === 'help') return ctx.reply(formatHelp(), menuOpts());
+    if (action === 'help') return replyHelp(ctx);
   });
 
   // —— Inline callbacks ——
@@ -494,9 +495,45 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       return;
     }
 
-    if (parsed.type === 'refresh_status') {
-      await ctx.answerCallbackQuery({ text: 'به‌روزرسانی…' });
+    if (parsed.type === 'refresh_status' || parsed.type === 'nav_dash') {
+      await ctx.answerCallbackQuery({ text: 'داشبورد…' });
       await replyStatus(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_home') {
+      await ctx.answerCallbackQuery();
+      await replyHome(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_settings') {
+      await ctx.answerCallbackQuery();
+      await replySettings(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_help') {
+      await ctx.answerCallbackQuery();
+      await replyHelp(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_pause') {
+      await ctx.answerCallbackQuery({ text: 'مکث' });
+      await doPause(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_resume') {
+      await ctx.answerCallbackQuery({ text: 'ادامه' });
+      await doResume(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'set_scan') {
+      await ctx.answerCallbackQuery({ text: 'اسکن…' });
+      await doScan(ctx, { edit: true });
       return;
     }
 
@@ -506,23 +543,25 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       return;
     }
 
-    if (parsed.type === 'goto_chats') {
+    if (parsed.type === 'goto_chats' || parsed.type === 'page_chats') {
       await ctx.answerCallbackQuery();
       if (!roomFlows) {
-        await ctx.reply('room flows در دسترس نیست.', menuOpts());
+        await ctx.reply('گفتگوها در دسترس نیست.', menuOpts());
         return;
       }
-      await roomFlows.replyRoomsList(ctx, { unreadOnly: false });
+      const page = parsed.type === 'page_chats' ? parsed.page : 1;
+      await roomFlows.replyRoomsList(ctx, { unreadOnly: false, edit: true, page });
       return;
     }
 
-    if (parsed.type === 'goto_unread') {
+    if (parsed.type === 'goto_unread' || parsed.type === 'page_unread') {
       await ctx.answerCallbackQuery();
       if (!roomFlows) {
-        await ctx.reply('room flows در دسترس نیست.', menuOpts());
+        await ctx.reply('هشدارها در دسترس نیست.', menuOpts());
         return;
       }
-      await roomFlows.replyRoomsList(ctx, { unreadOnly: true });
+      const page = parsed.type === 'page_unread' ? parsed.page : 1;
+      await roomFlows.replyRoomsList(ctx, { unreadOnly: true, edit: true, page });
       return;
     }
 
@@ -534,12 +573,23 @@ export function createBot({ token, ownerChatId, hooks = {} }) {
       const rid = parsed.roomId;
       if (parsed.type === 'room_open') {
         await ctx.answerCallbackQuery({ text: 'باز کردن…' });
-        await roomFlows.replyRoomCard(ctx, rid);
+        await roomFlows.replyRoomCard(ctx, rid, { edit: true });
         return;
       }
       if (parsed.type === 'room_approve') {
-        await ctx.answerCallbackQuery({ text: 'تأیید…' });
+        // Confirmation step — do not send yet
+        await ctx.answerCallbackQuery({ text: 'پیش‌نمایش…' });
+        await roomFlows.showSendConfirm(ctx, rid);
+        return;
+      }
+      if (parsed.type === 'room_confirm_send') {
+        await ctx.answerCallbackQuery({ text: 'ثبت…' });
         await roomFlows.approveSend(ctx, rid);
+        return;
+      }
+      if (parsed.type === 'room_cancel_confirm') {
+        await ctx.answerCallbackQuery({ text: 'انصراف' });
+        await roomFlows.replyRoomCard(ctx, rid, { edit: true });
         return;
       }
       if (parsed.type === 'room_reject') {

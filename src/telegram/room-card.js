@@ -1,42 +1,90 @@
 /**
- * Telegram room card formatter + inline keyboards for per-chat control.
+ * Telegram room / chat cards — SaaS-style ops dashboard UX.
  */
 import { InlineKeyboard } from 'grammy';
 import { redactString } from '../security/redaction.js';
 import { formatAgeFa, truncatePreview } from './ui.js';
 
+export const ROOMS_PAGE_SIZE = 5;
+
 /**
- * Inline keyboard for a room card.
- * Callback data kept under Telegram's 64-byte limit.
+ * Chat detail card actions: AI Summary / Note / Approve / Reject / Refresh / Back / Home
  * @param {string|number} roomId
  */
 export function roomCardKeyboard(roomId) {
   const id = String(roomId);
   return new InlineKeyboard()
+    .text('🤖 خلاصه AI', `room:ai:${id}`)
+    .text('📝 نوت', `room:note:${id}`)
+    .row()
     .text('✅ تأیید ارسال', `room:ok:${id}`)
     .text('❌ رد', `room:no:${id}`)
     .row()
-    .text('📝 نوت', `room:note:${id}`)
     .text('🔄 تازه‌سازی', `room:ref:${id}`)
-    .row()
-    .text('🤖 تحلیل AI', `room:ai:${id}`);
+    .text('◀️ بازگشت', 'goto:chats')
+    .text('🏠 خانه', 'nav:home');
 }
 
 /**
+ * Confirmation before send — preview + Confirm / Cancel
  * @param {string|number} roomId
  */
-export function roomOpenKeyboard(roomId) {
-  return new InlineKeyboard().text('باز کردن', `room:open:${roomId}`);
+export function roomConfirmKeyboard(roomId) {
+  const id = String(roomId);
+  return new InlineKeyboard()
+    .text('✅ تأیید نهایی', `room:cfm:${id}`)
+    .text('❌ انصراف', `room:ccl:${id}`)
+    .row()
+    .text('◀️ بازگشت به کارت', `room:open:${id}`)
+    .text('🏠 خانه', 'nav:home');
 }
 
 /**
- * Parse room-related callback_data.
+ * List-row open button (View)
+ * @param {string|number} roomId
+ * @param {string} [label]
+ */
+export function roomOpenKeyboard(roomId, label = '👁 مشاهده') {
+  return new InlineKeyboard().text(label, `room:open:${roomId}`);
+}
+
+/**
+ * Paginated rooms list keyboard — one View button per room + nav.
+ * @param {object[]} pageRooms
+ * @param {{ page?: number, totalPages?: number, unreadOnly?: boolean }} [opts]
+ */
+export function roomsListKeyboard(pageRooms, { page = 1, totalPages = 1, unreadOnly = false } = {}) {
+  const kb = new InlineKeyboard();
+  for (const r of pageRooms) {
+    const id = String(r.roomId ?? r.id);
+    const name = truncatePreview(r.guestName || r.guest_name || r.title || `#${id}`, 18);
+    const badge = Number(r.unread) > 0 ? '🔴' : '⚪';
+    kb.text(`${badge} ${name}`, `room:open:${id}`).row();
+  }
+
+  const prefix = unreadOnly ? 'unrd' : 'chats';
+  if (totalPages > 1) {
+    const prev = Math.max(1, page - 1);
+    const next = Math.min(totalPages, page + 1);
+    if (page > 1) kb.text('◀️ قبلی', `page:${prefix}:${prev}`);
+    kb.text(`${page}/${totalPages}`, `page:${prefix}:${page}`);
+    if (page < totalPages) kb.text('بعدی ▶️', `page:${prefix}:${next}`);
+    kb.row();
+  }
+
+  kb.text('🔄 تازه‌سازی', unreadOnly ? 'goto:unread' : 'goto:chats')
+    .text('🏠 خانه', 'nav:home')
+    .text('📊 داشبورد', 'nav:dash');
+  return kb;
+}
+
+/**
+ * Parse room-related callback_data (kept short for 64-byte limit).
  * @param {string} data
- * @returns {{ type: string, roomId?: string } | null}
  */
 export function parseRoomCallback(data) {
   if (typeof data !== 'string' || !data) return null;
-  const m = /^room:(open|ok|no|note|ref|ai):([0-9A-Za-z_-]{1,24})$/.exec(data);
+  const m = /^room:(open|ok|no|note|ref|ai|cfm|ccl):([0-9A-Za-z_-]{1,24})$/.exec(data);
   if (!m) return null;
   const map = {
     open: 'room_open',
@@ -45,17 +93,19 @@ export function parseRoomCallback(data) {
     note: 'room_note',
     ref: 'room_refresh',
     ai: 'room_ai',
+    cfm: 'room_confirm_send',
+    ccl: 'room_cancel_confirm',
   };
   return { type: map[m[1]], roomId: m[2] };
 }
 
 /**
- * Format a room list line for «چت‌ها» / «خوانده‌نشده».
+ * Format a room list line for «گفتگوها» / «هشدارها».
  */
 export function formatRoomListItem(room, index = 0) {
   const name = room.guestName || room.guest_name || room.title || '—';
   const id = room.roomId ?? room.id ?? '—';
-  const unread = Number(room.unread) > 0 ? `🔴 ${room.unread}` : '⚪';
+  const unread = Number(room.unread) > 0 ? `🔴 ${room.unread}` : '⚪ خوانده';
   const preview = truncatePreview(room.lastMessage || room.last_message || '', 48);
   const lines = [`${index + 1}. ${name} · #${id} · ${unread}`];
   if (preview) lines.push(`   «${preview}»`);
@@ -63,30 +113,63 @@ export function formatRoomListItem(room, index = 0) {
 }
 
 /**
- * Build room list message + per-row open keyboards (caller sends separately).
+ * Build room list message + paginated inline keyboard (single message preferred).
  * @param {object[]} rooms
- * @param {{ title?: string, max?: number }} [opts]
+ * @param {{ title?: string, page?: number, pageSize?: number, unreadOnly?: boolean }} [opts]
  */
-export function formatRoomsList(rooms, { title = '💬 چت‌ها', max = 10 } = {}) {
+export function formatRoomsList(
+  rooms,
+  { title = '💬 گفتگوها', page = 1, pageSize = ROOMS_PAGE_SIZE, unreadOnly = false } = {}
+) {
   if (!rooms?.length) {
-    return { text: `${title}\n\nاتاقی برای نمایش نیست.`, items: [] };
+    const emptyHint = unreadOnly
+      ? 'فعلاً خوانده‌نشده‌ای نیست — عالی است! 🎉'
+      : 'گفتگویی برای نمایش نیست. اسکن یا اتصال کارلنسر را بررسی کنید.';
+    return {
+      text: [title, '————————', '', emptyHint].join('\n'),
+      items: [],
+      page: 1,
+      totalPages: 1,
+      pageRooms: [],
+      keyboard: roomsListKeyboard([], { page: 1, totalPages: 1, unreadOnly }),
+    };
   }
-  const slice = rooms.slice(0, max);
-  const lines = [title, '', `تعداد: ${rooms.length}${rooms.length > max ? ` (نمایش ${max})` : ''}`, ''];
+
+  const totalPages = Math.max(1, Math.ceil(rooms.length / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * pageSize;
+  const pageRooms = rooms.slice(start, start + pageSize);
+
+  const lines = [
+    title,
+    '————————',
+    '',
+    `تعداد: ${rooms.length} · صفحه ${safePage}/${totalPages}`,
+    '',
+  ];
   const items = [];
-  for (let i = 0; i < slice.length; i++) {
-    const r = slice[i];
-    lines.push(formatRoomListItem(r, i));
+  for (let i = 0; i < pageRooms.length; i++) {
+    const r = pageRooms[i];
+    lines.push(formatRoomListItem(r, start + i));
     items.push({
       roomId: String(r.roomId ?? r.id),
       keyboard: roomOpenKeyboard(r.roomId ?? r.id),
     });
   }
-  return { text: lines.join('\n'), items };
+  lines.push('', 'از دکمه‌های زیر «مشاهده» را بزنید.');
+
+  return {
+    text: lines.join('\n'),
+    items,
+    page: safePage,
+    totalPages,
+    pageRooms,
+    keyboard: roomsListKeyboard(pageRooms, { page: safePage, totalPages, unreadOnly }),
+  };
 }
 
 /**
- * Full room detail card (may be long — caller can split).
+ * Full room detail card.
  * @param {object} card
  */
 export function formatRoomCard(card = {}) {
@@ -102,20 +185,21 @@ export function formatRoomCard(card = {}) {
   const sendStatus = card.sendStatus || null;
 
   const lines = [
-    `🗂 کارت اتاق #${roomId}`,
+    `🗂 گفتگو #${roomId}`,
+    '————————',
     '',
-    `• مهمان: ${redactString(String(guest))}`,
+    '👤 طرف گفتگو',
+    `• نام: ${redactString(String(guest))}`,
     unread != null ? `• خوانده‌نشده: ${unread}` : null,
     card.updatedAt ? `• به‌روزرسانی: ${formatAgeFa(card.updatedAt)}` : null,
     decisionLine(decision),
     sendStatus ? `• وضعیت ارسال: ${sendStatus}` : null,
   ].filter((x) => x != null);
 
-  // Project block
   if (project.title || project.id || card.projectSlug) {
     lines.push('', '📁 پروژه');
     if (project.title) lines.push(`• عنوان: ${truncatePreview(project.title, 80)}`);
-    if (project.id) lines.push(`• شناسه پروژه: ${project.id}`);
+    if (project.id) lines.push(`• شناسه: ${project.id}`);
     if (card.projectSlug) lines.push(`• اسلاگ: ${truncatePreview(card.projectSlug, 60)}`);
     const minB = project.minBudget ?? project.min_budget;
     const maxB = project.maxBudget ?? project.max_budget;
@@ -123,7 +207,7 @@ export function formatRoomCard(card = {}) {
       lines.push(`• بودجه: ${fmtNum(minB)} – ${fmtNum(maxB)}`);
     }
     const dur = project.jobDuration ?? project.job_duration ?? project.duration;
-    if (dur != null) lines.push(`• مدت (اعلامی): ${dur} روز`);
+    if (dur != null) lines.push(`• مدت: ${dur} روز`);
     if (project.hireDeadline || project.hire_deadline) {
       lines.push(`• مهلت استخدام: ${formatAgeFa(project.hireDeadline || project.hire_deadline)}`);
     }
@@ -132,18 +216,16 @@ export function formatRoomCard(card = {}) {
     if (project.isUrgent || project.is_urgent) lines.push('• فوری: بله');
   }
 
-  // Proposal / price if present in messages text
   if (card.proposalPrice != null) {
-    lines.push(`• پیشنهاد قیمت (استخراج‌شده): ${fmtNum(card.proposalPrice)}`);
+    lines.push(`• پیشنهاد قیمت: ${fmtNum(card.proposalPrice)}`);
   }
   if (card.proposalDays != null) {
     lines.push(`• پیشنهاد مدت: ${card.proposalDays} روز`);
   }
 
-  // Last messages
   const lastN = messages.slice(-5);
   if (lastN.length) {
-    lines.push('', '💬 آخرین پیام‌ها:');
+    lines.push('', '💬 آخرین پیام‌ها');
     for (const m of lastN) {
       const who = m.isOwn === true ? 'من' : m.isOwn === false ? 'کارفرما' : '?';
       const t = truncatePreview(m.text || '', 120);
@@ -151,9 +233,8 @@ export function formatRoomCard(card = {}) {
     }
   }
 
-  // Files / photos
   if (files.length) {
-    lines.push('', '📎 فایل‌ها / عکس‌ها:');
+    lines.push('', '📎 فایل‌ها');
     for (const f of files.slice(0, 8)) {
       const label = f.name || f.kind || 'فایل';
       lines.push(`• ${label}: ${truncatePreview(f.url || '', 80)}`);
@@ -162,32 +243,131 @@ export function formatRoomCard(card = {}) {
     lines.push('', `📎 ${card.attachmentsNote}`);
   }
 
-  // Draft
-  lines.push('', '📝 پیش‌نویس پاسخ (آماده تأیید):');
+  lines.push('', '📝 پیش‌نویس پاسخ');
   if (draft) {
     lines.push(redactString(String(draft)).slice(0, 1500));
   } else {
-    lines.push('(هنوز پیش‌نویسی ساخته نشده)');
+    lines.push('(هنوز پیش‌نویسی نیست — نوت یا خلاصه AI بزنید)');
   }
 
   if (note) {
-    lines.push('', `📌 نوت مالک: ${redactString(String(note)).slice(0, 400)}`);
+    lines.push('', `📌 نوت شما: ${redactString(String(note)).slice(0, 400)}`);
   }
 
-  lines.push(
-    '',
-    'دکمه‌ها: ✅ تأیید ارسال · ❌ رد · 📝 نوت · 🔄 تازه‌سازی · 🤖 تحلیل AI'
-  );
   if (!card.sendApiLive) {
-    lines.push('⚠️ ارسال API فعلاً blocked_by_missing_api تا قرارداد VerifiedMutation ثبت شود.');
+    lines.push(
+      '',
+      'ℹ️ ارسال واقعی فعلاً مسدود است (blocked_by_missing_api).',
+      'تأیید شما ثبت می‌شود؛ ارسال بعد از ثبت قرارداد API.'
+    );
   }
 
   let text = lines.join('\n');
-  // Telegram hard limit ~4096; keep margin
   if (text.length > 3900) {
     text = text.slice(0, 3890) + '\n…';
   }
   return text;
+}
+
+/**
+ * Confirmation preview before send.
+ */
+export function formatSendConfirmPreview(card = {}) {
+  const roomId = card.roomId ?? card.id ?? '—';
+  const guest = card.guestName || card.guest_name || '—';
+  const draft = redactString(String(card.draftText || card.draft?.text || '')).slice(0, 1200);
+  const lines = [
+    '⚠️ تأیید نهایی ارسال',
+    '————————',
+    '',
+    `• اتاق: #${roomId}`,
+    `• طرف: ${redactString(String(guest))}`,
+    '',
+    '📤 متنی که ارسال می‌شود:',
+    draft || '(خالی)',
+    '',
+  ];
+  if (!card.sendApiLive) {
+    lines.push(
+      'ℹ️ حتی با تأیید نهایی، ارسال واقعی فعلاً',
+      'blocked_by_missing_api است — صادقانه ثبت می‌شود.',
+      ''
+    );
+  } else {
+    lines.push('این عمل پیام را به صف ارسال واقعی می‌فرستد.', '');
+  }
+  lines.push('تأیید نهایی یا انصراف را انتخاب کنید.');
+  return lines.join('\n');
+}
+
+/**
+ * Readable AI analysis card: risk, intent, suggested action, reason.
+ * @param {object} analysis
+ * @param {{ roomId?: string|number, draftUpdated?: boolean }} [meta]
+ */
+export function formatAiAnalysisCard(analysis = {}, meta = {}) {
+  const data = analysis.data || {};
+  const summary = redactString(String(analysis.summary || data.summary || '')).slice(0, 800);
+  const risk =
+    data.risk ||
+    data.riskLevel ||
+    data.risk_level ||
+    inferRisk(summary, analysis.ok);
+  const intent = data.intent || data.goal || data.category || inferIntent(summary);
+  const action =
+    data.suggestedAction ||
+    data.suggested_action ||
+    data.action ||
+    (analysis.ok ? 'بررسی پیش‌نویس و تأیید دستی' : 'بعداً دوباره تحلیل کنید');
+  const reason =
+    data.reason ||
+    data.rationale ||
+    (summary ? truncatePreview(summary, 280) : analysis.ok ? '—' : 'مدل در دسترس نبود یا خطا رخ داد');
+
+  const lines = [
+    '🤖 خلاصه تحلیل AI',
+    '————————',
+    '',
+    meta.roomId != null ? `• گفتگو: #${meta.roomId}` : null,
+    `• ریسک: ${riskEmoji(risk)} ${risk}`,
+    `• نیت: ${intent}`,
+    `• اقدام پیشنهادی: ${action}`,
+    `• دلیل: ${reason}`,
+  ].filter((x) => x != null);
+
+  if (summary && summary !== reason) {
+    lines.push('', '📄 جزئیات', summary.slice(0, 600));
+  }
+  if (meta.draftUpdated) {
+    lines.push('', '✅ پیش‌نویس بر اساس تحلیل به‌روز شد.');
+  } else if (analysis.ok === false) {
+    lines.push('', 'ℹ️ پیش‌نویس بدون تغییر مدل به‌روز نشد.');
+  }
+  return lines.join('\n');
+}
+
+function inferRisk(summary, ok) {
+  if (ok === false) return 'نامشخص';
+  const s = String(summary || '').toLowerCase();
+  if (/risk|ریسک|خطر|فوری|urgent|scam|کلاه/.test(s)) return 'بالا';
+  if (/متوسط|medium|احتیاط/.test(s)) return 'متوسط';
+  return 'پایین / عادی';
+}
+
+function inferIntent(summary) {
+  const s = String(summary || '');
+  if (/پیشنهاد|bid|قیمت/.test(s)) return 'درخواست پیشنهاد / قیمت';
+  if (/سوال|سؤال|clarify/.test(s)) return 'سوال کارفرما';
+  if (/استخدام|hire|تمام.?وقت/.test(s)) return 'پیگیری استخدام';
+  if (!s.trim()) return 'نامشخص';
+  return 'گفتگوی پروژه';
+}
+
+function riskEmoji(risk) {
+  const r = String(risk || '');
+  if (/بالا|high|critical/i.test(r)) return '🔴';
+  if (/متوسط|medium|نامشخص/i.test(r)) return '🟡';
+  return '🟢';
 }
 
 function decisionLine(status) {
@@ -233,10 +413,15 @@ export function extractProposalHints(text) {
 
 export default {
   roomCardKeyboard,
+  roomConfirmKeyboard,
   roomOpenKeyboard,
+  roomsListKeyboard,
   parseRoomCallback,
   formatRoomCard,
   formatRoomsList,
   formatRoomListItem,
+  formatSendConfirmPreview,
+  formatAiAnalysisCard,
   extractProposalHints,
+  ROOMS_PAGE_SIZE,
 };

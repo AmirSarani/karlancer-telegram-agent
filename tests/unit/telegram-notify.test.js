@@ -43,17 +43,17 @@ test('formatScanSummary Persian card with priority rooms', () => {
   assert.match(text, /خلاصه اسکن/);
   assert.match(text, /1016/);
   assert.match(text, /1\/102/);
-  assert.match(text, /خوانده‌نشده در این صفحه: 1/);
+  assert.match(text, /خوانده‌نشده: 1/);
   assert.match(text, /Ardeshir\.A/);
   assert.match(text, /7241431/);
-  assert.match(text, /باز کردن تأییدها/);
+  assert.match(text, /هشدارها یا تأییدها/);
   assert.doesNotMatch(text, /Bearer /);
 });
 
 test('formatScanSummary empty priority still hints next action', () => {
   const text = formatScanSummary({ page: 2, total: 0, pageCount: 0, unreadOnPage: 0, priorityRooms: [] });
-  assert.match(text, /اولویتی/);
-  assert.match(text, /HITL/);
+  assert.match(text, /اولویتی|آرام/);
+  assert.match(text, /هشدارها یا تأییدها/);
 });
 
 test('formatStatusCard shows کارلنسر متصل/قطع and last scan', () => {
@@ -66,13 +66,15 @@ test('formatStatusCard shows کارلنسر متصل/قطع and last scan', () =
     running: 0,
     waitingApproval: 0,
     pendingApprovals: 0,
+    pollOk: true,
   });
-  assert.match(connected, /کارلنسر: متصل/);
+  assert.match(connected, /کارلنسر: ✅ متصل/);
   assert.match(connected, /آخرین اسکن/);
-  assert.match(connected, /خوانده‌نشده آخرین اسکن: 1/);
+  assert.match(connected, /خوانده‌نشده اسکن: 1/);
+  assert.match(connected, /سیستم سالم/);
 
   const cut = formatStatusCard({ karlancerAuth: false });
-  assert.match(cut, /کارلنسر: قطع/);
+  assert.match(cut, /کارلنسر: ❌ قطع/);
 });
 
 test('formatWelcome includes karlancer line', () => {
@@ -80,9 +82,10 @@ test('formatWelcome includes karlancer line', () => {
   assert.match(formatWelcome({ karlancerAuth: false }), /کارلنسر: قطع/);
 });
 
-test('afterScanInlineKeyboard has approvals + status', () => {
+test('afterScanInlineKeyboard has approvals + status + home', () => {
   const kb = afterScanInlineKeyboard();
   const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(data.includes('goto:approvals'));
   assert.ok(data.includes('refresh:status'));
+  assert.ok(data.includes('nav:home'));
 });
