@@ -448,7 +448,7 @@ export async function handleJob(ctx, job) {
         mutations: ctx.mutations || null,
         tenantId: job.tenantId || 'default',
         notify: ctx.notifyOpportunity || null,
-        allowLiveAutoBid: Boolean(ctx.allowLiveAutoBid),
+        allowLiveAutoBid: typeof ctx.getAllowLiveAutoBid === 'function' ? Boolean(ctx.getAllowLiveAutoBid()) : Boolean(ctx.allowLiveAutoBid),
       });
       // Respect agent pause / emergency via scanner internals + settings
       const settings = scanner.settingsStore.get();

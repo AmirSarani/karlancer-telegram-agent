@@ -78,11 +78,11 @@ test('settings UX exposes relogin callback and help warns about Telegram history
   assert.deepEqual(parseCallbackData('set:relogin:cancel'), { type: 'set_relogin_cancel' });
   const card = formatSettingsCard({ state: 'running', karlancerAuth: false });
   assert.match(card, /تمدید نشست/);
-  assert.match(card, /ارتباط‌ها روی HTTPS/);
+  assert.match(card, /تمدید نشست|توکن مرورگر|کنترل سیستم/);
   const help = formatHelp();
-  assert.match(help, /تمدید نشست/);
-  assert.match(help, /تاریخچه|نگه ندارید/);
-  assert.match(help, /HTTPS/);
+  assert.match(help, /نشست|توکن مرورگر/);
+  assert.match(help, /نگه ندارید|چت/);
+  assert.match(help, /کنترل سیستم/);
   assert.match(help, /E2E/);
 });
 

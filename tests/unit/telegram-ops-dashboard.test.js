@@ -35,18 +35,21 @@ import {
   formatScanSummary,
 } from '../../src/telegram/scan-ux.js';
 
-test('main nav includes فرصت‌ها and صندوق; مهم‌ها retained', () => {
-  const labels = mainMenuKeyboard().keyboard.flat().map((b) => b.text);
+test('main nav includes فرصت‌ها، صندوق، کنترل سیستم', () => {
+  const rows = mainMenuKeyboard().keyboard;
+  for (const row of rows) assert.ok(row.length <= 2);
+  const labels = rows.flat().map((b) => b.text);
   assert.ok(labels.includes(BTN.DASHBOARD));
   assert.ok(labels.includes(BTN.CHATS));
   assert.ok(labels.includes(BTN.OPPORTUNITIES));
   assert.ok(labels.includes(BTN.INBOX));
   assert.ok(labels.includes(BTN.APPROVALS));
+  assert.ok(labels.includes(BTN.CONTROL));
   assert.ok(labels.includes(BTN.SETTINGS));
-  assert.ok(labels.includes(BTN.ALERTS));
   assert.match(BTN.ALERTS, /مهم/);
   assert.equal(mapMenuText('هشدارها'), 'alerts');
   assert.equal(mapMenuText(BTN.ALERTS), 'alerts');
+  assert.equal(mapMenuText(BTN.CONTROL), 'control');
   assert.equal(mapMenuText(BTN.OPPORTUNITIES), 'opportunities');
   assert.equal(mapMenuText(BTN.INBOX), 'inbox');
 });
@@ -70,6 +73,7 @@ test('home welcome is branded with status CTAs and no secrets', () => {
   assert.ok(data.includes('goto:unread'));
   assert.ok(data.includes('goto:approvals'));
   assert.ok(data.includes('nav:set'));
+  assert.ok(data.includes('cp:hub'));
 });
 
 test('dashboard hides technical dump; details screen has it', () => {
@@ -99,7 +103,7 @@ test('dashboard hides technical dump; details screen has it', () => {
     worker: 'idle',
     pollOk: true,
   });
-  assert.match(details, /جزئیات سیستم/);
+  assert.match(details, /جزئیات فنی|جزئیات سیستم/);
   assert.match(details, /صف کار/);
   assert.ok(
     systemDetailsKeyboard()

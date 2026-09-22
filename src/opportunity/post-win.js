@@ -148,17 +148,21 @@ export function formatPostWinSectionFa(state) {
     return [
       '🏆 پس از برد',
       '————————',
-      'هنوز سیگنال بردی شناسایی نشده.',
-      'پس از تشخیص، پیش‌نویس پیام اول برای تأیید شما ساخته می‌شود (ارسال خودکار نیست).',
+      '',
+      'هنوز بردی شناسایی نشده.',
+      '',
+      'وقتی پروژه را ببرید، اینجا پیش‌نویس پیام اول برای تأیید شما آماده می‌شود.',
+      'ارسال خودکار نیست — همیشه HITL.',
     ].join('\n');
   }
   const s = createPostWinState(state);
   return [
     '🏆 پس از برد',
     '————————',
-    `فاز: ${phaseFa(s.phase)}`,
-    s.projectId ? `پروژه: ${s.projectId}` : null,
-    s.draftText ? `\nپیش‌نویس پیام اول:\n${s.draftText}` : null,
+    '',
+    `• فاز: ${phaseFa(s.phase)}`,
+    s.projectId ? `• پروژه: ${s.projectId}` : null,
+    s.draftText ? `\n📝 پیش‌نویس پیام اول:\n${s.draftText}` : null,
     '',
     '⚠️ ارسال فقط با تأیید دستی (HITL). ایجنت تحویل کامل فعلاً فعال نیست.',
   ]

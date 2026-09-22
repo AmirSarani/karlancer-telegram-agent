@@ -14,6 +14,7 @@ import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
 import { notifyOwner, notifyAllOwners, editOwnerMessage } from './telegram/notify.js';
 import { notifyBaleOwners } from './telegram/bale-notify.js';
+import { createLiveAutoBidRef, readLiveAutoBidFlag } from './telegram/live-auto-flag.js';
 import { createSessionHealthMonitor } from './security/session-health.js';
 import { createPermissionGate } from './telegram/permission-gate.js';
 import { createMutationRequester } from './telegram/mutation-request.js';
@@ -35,6 +36,11 @@ async function main() {
   }
 
   const db = openDb(config.dbPath);
+  const liveAutoRef = createLiveAutoBidRef(
+    readLiveAutoBidFlag(db, { envDefault: Boolean(config.allowLiveAutoBid) })
+  );
+  const morningDigestRef = { current: null };
+  const baleTokenRef = { current: config.baleBotToken || '' };
   let nodeLock;
   try {
     nodeLock = acquireSingleWorkerConsumerLock(db, `main-${process.pid}`);
@@ -200,9 +206,10 @@ async function main() {
         logger.warn('telegram_notify_all_failed', { failed: tg.failed, errors: tg.errors?.slice?.(0, 2) });
       }
     }
-    if (config.baleBotToken) {
+    const baleTok = baleTokenRef.current || config.baleBotToken;
+    if (baleTok) {
       const bale = await notifyBaleOwners({
-        token: config.baleBotToken,
+        token: baleTok,
         chatIds: config.baleOwnerChatIds?.length ? config.baleOwnerChatIds : chatIds,
         text,
         apiRoot: config.baleApiRoot,
@@ -234,7 +241,8 @@ async function main() {
     notifyOpportunity: async (text) => {
       await notifyAllOwnersChannels(text);
     },
-    allowLiveAutoBid: Boolean(config.allowLiveAutoBid),
+    allowLiveAutoBid: liveAutoRef.get(),
+    getAllowLiveAutoBid: () => liveAutoRef.get(),
     leaseMs: 60_000,
     pollMs: 500,
     onEvent: async (type, payload) => {
@@ -283,7 +291,18 @@ async function main() {
       ownerChatIds: config.telegramOwnerChatIds,
       hooks: {
         envFile: path.join(config.root, '.env'),
-        allowLiveAutoBid: Boolean(config.allowLiveAutoBid),
+        allowLiveAutoBid: liveAutoRef.get(),
+        getAllowLiveAutoBid: () => liveAutoRef.get(),
+        setAllowLiveAutoBid: (v) => liveAutoRef.set(v),
+        getMorningDigest: () => morningDigestRef.current,
+        mcpHost: config.mcpHttpHost,
+        mcpPort: config.mcpHttpPort,
+        mcpApiKeySet: Boolean(config.mcpApiKey),
+        baleConfigured: Boolean(config.baleBotToken),
+        isBaleConfigured: () => Boolean(baleTokenRef.current),
+        setBaleToken: (t) => {
+          baleTokenRef.current = t || '';
+        },
         onScanMessage: (info) => {
           pendingScanUi = info;
         },
@@ -372,6 +391,7 @@ async function main() {
       pendingApprovals: () => queue.pendingApprovals().length,
       isPaused: () => runtime.state === 'paused',
     });
+    morningDigestRef.current = morningDigest;
     morningDigest.start(60_000);
 
     sessionHealth.start(15 * 60_000);

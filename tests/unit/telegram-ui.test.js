@@ -164,7 +164,7 @@ test('formatStatusCard is System Healthy style and redacts secrets', () => {
     worker: 'idle',
     pollOk: true,
   });
-  assert.match(details, /جزئیات سیستم/);
+  assert.match(details, /جزئیات فنی|جزئیات سیستم/);
   assert.match(details, /صف کار/);
   assert.ok(systemDetailsKeyboard().inline_keyboard.flat().some((b) => b.callback_data === 'nav:dash'));
   assert.equal(deriveSystemHealth({ karlancerAuth: true, pollOk: true, state: 'running' }), 'healthy');

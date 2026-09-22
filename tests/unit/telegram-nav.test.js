@@ -19,6 +19,7 @@ test('IA menu labels are Persian and include فرصت‌ها/صندوق', () => 
   assert.ok(labels.includes(BTN.OPPORTUNITIES));
   assert.ok(labels.includes(BTN.INBOX));
   assert.ok(labels.includes(BTN.SETTINGS));
+  assert.ok(labels.includes(BTN.CONTROL));
 });
 
 test('empty approvals and empty chats are friendly FA', () => {

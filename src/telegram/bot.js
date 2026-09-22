@@ -87,6 +87,8 @@ import {
   reloginCancelKeyboard,
   reloginChoiceKeyboard,
 } from './relogin-flow.js';
+import { createControlHandlers } from './control-handlers.js';
+import { readLiveAutoBidFlag } from './live-auto-flag.js';
 
 /**
  * Normalize owner id list from ownerChatIds and/or legacy ownerChatId.
@@ -223,6 +225,34 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       chatId: ctx.chat?.id ?? msg?.chat?.id,
     };
   }
+
+  const controlBridges = {
+    replyOpportunitiesHub: null,
+    replyOpportunityRules: null,
+    replyScoringProfile: null,
+    doOpportunityScan: null,
+    replyPostWin: null,
+  };
+
+  const control = createControlHandlers({
+    db,
+    api,
+    runtime,
+    owners,
+    editOrReply,
+    menuOpts,
+    wizard,
+    hooks,
+    getMorningDigest: () =>
+      typeof hooks.getMorningDigest === 'function'
+        ? hooks.getMorningDigest()
+        : hooks.morningDigest || null,
+    replyOpportunitiesHub: (ctx, opts) => controlBridges.replyOpportunitiesHub?.(ctx, opts),
+    replyOpportunityRules: (ctx, opts) => controlBridges.replyOpportunityRules?.(ctx, opts),
+    replyScoringProfile: (ctx, opts) => controlBridges.replyScoringProfile?.(ctx, opts),
+    doOpportunityScan: (ctx, opts) => controlBridges.doOpportunityScan?.(ctx, opts),
+    replyPostWin: (ctx, opts) => controlBridges.replyPostWin?.(ctx, opts),
+  });
 
   function readLastScanSummary() {
     if (!db) return null;
@@ -453,12 +483,17 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
 
   async function replySettings(ctx, { edit = false } = {}) {
     const exec = gate ? gate.settings.get() : {};
+    const liveAutoBid =
+      typeof hooks.getAllowLiveAutoBid === 'function'
+        ? Boolean(hooks.getAllowLiveAutoBid())
+        : readLiveAutoBidFlag(db, { envDefault: Boolean(hooks.allowLiveAutoBid) });
     let text = formatSettingsCard({
       state: runtime.state,
       karlancerAuth: api?.client ? Boolean(api.client.hasAuth) : null,
       executionMode: exec.mode || 'manual',
       emergencyStop: Boolean(exec.emergencyStop),
       toggles: exec.toggles || {},
+      liveAutoBid,
     });
     try {
       const th = checkTokenHealth({
@@ -861,6 +896,12 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     await replySettings(ctx);
   });
 
+  bot.command('control', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await control.replyHub(ctx);
+  });
+
   bot.command('mode', async (ctx) => {
     if (await denyIfNotOwner(ctx)) return;
     touch();
@@ -1026,12 +1067,20 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       return roomFlows.replyRoomsList(ctx, { unreadOnly: true });
     }
     if (action === 'settings') return replySettings(ctx);
+    if (action === 'control') return control.replyHub(ctx);
     if (action === 'scan') return doScan(ctx);
     if (action === 'pause') return doPause(ctx);
     if (action === 'resume') return doResume(ctx);
     if (action === 'help') return replyHelp(ctx);
   });
 
+
+  function resolveLiveAutoBid() {
+    if (typeof hooks.getAllowLiveAutoBid === 'function') {
+      return Boolean(hooks.getAllowLiveAutoBid());
+    }
+    return readLiveAutoBidFlag(db, { envDefault: Boolean(hooks.allowLiveAutoBid) });
+  }
 
   function getOppScanner(notifyFn = null) {
     if (!db || !api) return null;
@@ -1041,7 +1090,7 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       mutations,
       tenantId: 'default',
       notify: notifyFn,
-      allowLiveAutoBid: Boolean(hooks.allowLiveAutoBid),
+      allowLiveAutoBid: resolveLiveAutoBid(),
     });
   }
 
@@ -1252,8 +1301,15 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     );
   }
 
+  controlBridges.replyOpportunitiesHub = replyOpportunitiesHub;
+  controlBridges.replyOpportunityRules = replyOpportunityRules;
+  controlBridges.replyScoringProfile = replyScoringProfile;
+  controlBridges.doOpportunityScan = doOpportunityScan;
+  controlBridges.replyPostWin = replyPostWin;
+
   async function maybeHandleWizardText(ctx) {
     if (!wizard || !db) return false;
+    if (await control.handleWizardText(ctx)) return true;
     const st = wizard.get(ctx.from?.id);
     if (!st?.kind) return false;
     const textIn = (ctx.message?.text || '').trim();
@@ -1346,6 +1402,22 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
   bot.on('callback_query:data', async (ctx) => {
     if (await denyIfNotOwner(ctx, { asCallback: true })) return;
     touch();
+    const rawCb = ctx.callbackQuery.data;
+    // Control panel + wizards (also handles hands:live:ask)
+    if (
+      rawCb === 'hands:live:ask' ||
+      (typeof rawCb === 'string' &&
+        (rawCb.startsWith('cp:') ||
+          rawCb.startsWith('eyes:') ||
+          rawCb.startsWith('brain:') ||
+          rawCb.startsWith('hands:') ||
+          rawCb.startsWith('notif:') ||
+          rawCb.startsWith('wiz:')))
+    ) {
+      const cpParsed = parseCallbackData(rawCb) || { type: null };
+      if (await control.handleCallback(ctx, cpParsed)) return;
+    }
+
     const parsed = parseCallbackData(ctx.callbackQuery.data);
     if (!parsed) {
       await ctx.answerCallbackQuery({ text: 'دکمه نامعتبر' });

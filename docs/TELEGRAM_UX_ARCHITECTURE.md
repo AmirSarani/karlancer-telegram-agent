@@ -14,7 +14,8 @@ Owner: `1366010187` · Bot: `@KarlanserAlertbot`
 | گفتگوها | Paginated rooms | Was «چت‌ها» |
 | هشدارها | Unread-only rooms | Was «خوانده‌نشده» |
 | تأییدها | Pending approvals | Unchanged |
-| تنظیمات | Pause/Resume + Scan | New hub |
+| کنترل سیستم | Eyes/Brain/Hands hub | Full remote control |
+| تنظیمات | Pause/Resume + mode | Execution hub |
 | راهنما | Help | Unchanged role |
 
 Slash commands remain as power-user shortcuts; `setMyCommands` mirrors the IA in Persian.
@@ -73,3 +74,6 @@ Slash commands remain as power-user shortcuts; `setMyCommands` mirrors the IA in
 - `docs/TELEGRAM_UX_*.md` *(this set)*
 
 `notify.js` intentionally unchanged.
+
+
+See also `docs/TELEGRAM_CONTROL_PANEL.md`.
