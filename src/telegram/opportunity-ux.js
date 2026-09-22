@@ -2,33 +2,23 @@
  * Telegram UX for opportunities — hub, cards, scoring profile, rule editor, smart bid, decision inbox.
  */
 import { InlineKeyboard } from 'grammy';
+import {
+  formatOpportunityNotify,
+  formatOpportunityScanResultBody,
+  formatBudgetCompact,
+  formatSkillsChips,
+  formatCategoryLine,
+  formatWhyBullets,
+  decisionLabelFa,
+} from '../opportunity/format-notify.js';
 
 /**
  * @param {object} card
  * @param {{ opportunity: object, score?: number, reasons?: string[], decision?: string }} card
  */
 export function formatOpportunityCard(card) {
-  const o = card.opportunity || card;
-  const budget =
-    o.budgetMin != null || o.budgetMax != null
-      ? `${faNum(o.budgetMin)} – ${faNum(o.budgetMax)}`
-      : '—';
-  const reasons = (card.reasons || o.scoreReasons || []).slice(0, 4);
-  return [
-    '🔥 فرصت جدید',
-    '————————',
-    o.title || `پروژه ${o.id}`,
-    `💰 بودجه: ${budget}`,
-    `⭐ امتیاز: ${card.score ?? o.score ?? '—'} / ۱۰۰`,
-    `📌 تصمیم: ${decisionFa(card.decision || o.decision)}`,
-    o.category ? `📂 دسته: ${o.category}` : null,
-    (o.skills || []).length ? `🛠 ${(o.skills || []).slice(0, 5).join('، ')}` : null,
-    '',
-    'چرا؟',
-    ...reasons.map((r) => `• ${r}`),
-  ]
-    .filter((l) => l != null)
-    .join('\n');
+  // Same readable body as scan notify (buttons stay on keyboard separately).
+  return formatOpportunityNotify(card);
 }
 
 export function opportunityCardKeyboard(projectId) {
@@ -74,11 +64,7 @@ export function opportunityScanResultKeyboard(summary = {}) {
  */
 export function formatOpportunityDetails(card) {
   const o = card.opportunity || card;
-  const budget =
-    o.budgetMin != null || o.budgetMax != null
-      ? `${faNum(o.budgetMin)} – ${faNum(o.budgetMax)}`
-      : '—';
-  const reasons = (card.reasons || o.scoreReasons || []).slice(0, 8);
+  const reasons = formatWhyBullets(card.reasons || o.scoreReasons || [], { max: 6 });
   const client = o.client || {};
   const clientBits = [
     client.name || client.username || null,
@@ -91,16 +77,17 @@ export function formatOpportunityDetails(card) {
       ? `${desc.slice(0, 279)}…`
       : desc
     : null;
+  const score = card.score ?? o.score ?? '—';
   return [
     '🔎 جزئیات فرصت',
-    '————————',
+    '',
     o.title || `پروژه ${o.id}`,
     `🆔 ${o.id}`,
-    `💰 بودجه: ${budget}`,
-    `⭐ امتیاز: ${card.score ?? o.score ?? '—'} / ۱۰۰`,
-    `📌 تصمیم: ${decisionFa(card.decision || o.decision)}`,
-    o.category ? `📂 دسته: ${o.category}` : null,
-    (o.skills || []).length ? `🛠 ${(o.skills || []).join('، ')}` : null,
+    '',
+    `💰 ${formatBudgetCompact(o.budgetMin, o.budgetMax)}`,
+    `⭐ ${faNum(score)} از ۱۰۰ · ${decisionLabelFa(card.decision || o.decision)}`,
+    formatCategoryLine(o.category),
+    formatSkillsChips(o.skills, { max: 8 }),
     clientBits.length ? `👤 کارفرما: ${clientBits.join(' · ')}` : null,
     o.ageHours != null ? `⏱ سن تقریبی: ${faNum(o.ageHours)} ساعت` : null,
     o.source ? `📥 منبع: ${o.source}` : null,
@@ -109,7 +96,7 @@ export function formatOpportunityDetails(card) {
     descLine,
     reasons.length ? '' : null,
     reasons.length ? 'چرا این امتیاز؟' : null,
-    ...reasons.map((r) => `• ${r}`),
+    ...reasons,
   ]
     .filter((l) => l != null)
     .join('\n');
@@ -226,23 +213,7 @@ export function formatOpportunitiesHub(opts = {}) {
 }
 
 export function formatOpportunityScanResult(summary = {}) {
-  if (summary.skipped) {
-    return `⏸ اسکن فرصت رد شد: ${summary.reason || '—'}`;
-  }
-  return [
-    '🔍 نتیجه اسکن فرصت‌ها',
-    '————————',
-    `بررسی‌شده: ${faNum(summary.scanned ?? 0)}`,
-    `جدید: ${faNum(summary.newCount ?? 0)}`,
-    `منطبق با قانون: ${faNum(summary.matched ?? 0)}`,
-    `پیش‌نویس: ${faNum(summary.drafts ?? 0)}`,
-    `تأیید: ${faNum(summary.approvals ?? 0)}`,
-    `خودکار محدود: ${faNum(summary.autoExecuted ?? 0)}`,
-    `اطلاع‌رسانی: ${faNum(summary.notified ?? 0)}`,
-    summary.errors?.length ? `خطاها: ${faNum(summary.errors.length)}` : null,
-  ]
-    .filter(Boolean)
-    .join('\n');
+  return formatOpportunityScanResultBody(summary);
 }
 
 export function formatOpportunityRule(rule) {
@@ -486,20 +457,7 @@ export function parseInboxCallback(data) {
 }
 
 function decisionFa(d) {
-  switch (d) {
-    case 'IGNORE':
-      return 'نادیده';
-    case 'NOTIFY':
-      return 'اطلاع‌رسانی';
-    case 'CREATE_DRAFT':
-      return 'پیش‌نویس پیشنهاد';
-    case 'REQUEST_APPROVAL':
-      return 'نیاز به تأیید';
-    case 'AUTO_EXECUTE':
-      return 'اجرای خودکار محدود';
-    default:
-      return String(d || '—');
-  }
+  return decisionLabelFa(d);
 }
 
 function formatCondValue(v) {

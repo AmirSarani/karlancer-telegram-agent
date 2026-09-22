@@ -17,6 +17,7 @@ import {
 } from '../telegram/agent-settings.js';
 import { createPermissionGate } from '../telegram/permission-gate.js';
 import { getVerifiedMutation } from '../api/contracts/verified-mutation.js';
+import { formatOpportunityNotify } from './format-notify.js';
 
 /**
  * @param {object} deps
@@ -552,57 +553,6 @@ async function applySideEffects({
   return {};
 }
 
-/**
- * @param {{ opportunity: object, score?: number, reasons?: string[], decision?: string }} card
- */
-export function formatOpportunityNotify(card) {
-  const o = card.opportunity || {};
-  const budget =
-    o.budgetMin != null || o.budgetMax != null
-      ? `${fmt(o.budgetMin)} – ${fmt(o.budgetMax)}`
-      : '—';
-  const reasonLines = (card.reasons || []).slice(0, 5).map((r) => `• ${r}`);
-  return [
-    '🔥 فرصت جدید',
-    '————————',
-    o.title || `پروژه ${o.id}`,
-    `💰 بودجه: ${budget}`,
-    `⭐ امتیاز: ${card.score ?? '—'} / ۱۰۰`,
-    `📌 تصمیم: ${decisionFa(card.decision)}`,
-    o.category ? `📂 دسته: ${o.category}` : null,
-    (o.skills || []).length ? `🛠 مهارت‌ها: ${o.skills.slice(0, 5).join('، ')}` : null,
-    '',
-    'چرا؟',
-    ...reasonLines,
-  ]
-    .filter((line) => line != null)
-    .join('\n');
-}
-
-function decisionFa(d) {
-  switch (d) {
-    case 'IGNORE':
-      return 'نادیده';
-    case 'NOTIFY':
-      return 'اطلاع‌رسانی';
-    case 'CREATE_DRAFT':
-      return 'پیش‌نویس پیشنهاد';
-    case 'REQUEST_APPROVAL':
-      return 'نیاز به تأیید';
-    case 'AUTO_EXECUTE':
-      return 'اجرای خودکار محدود (گیت + سقف)';
-    default:
-      return String(d || '—');
-  }
-}
-
-function fmt(v) {
-  if (v == null) return '—';
-  try {
-    return Number(v).toLocaleString('fa-IR');
-  } catch {
-    return String(v);
-  }
-}
+export { formatOpportunityNotify };
 
 export default createOpportunityScanner;
