@@ -1,53 +1,77 @@
-# AGENT_HANDOFF
+# AGENT_HANDOFF (complete — 2026-09-22 IRST)
 
-- timestamp_local: 2026-09-20 23:07 IRST (Asia/Tehran)
-- agent: interim-karlancer
-- branch: `api-first-mcp-agent`
-- status: **live auth OK on VPS**; first rooms page sampled; docs finalized
-- PR: [#1](https://github.com/AmirSarani/karlancer-telegram-agent/pull/1) **OPEN — keep unmerged**
-- repo: public `https://github.com/AmirSarani/karlancer-telegram-agent.git`
+- **timestamp:** 2026-09-22 ~06:55 Asia/Tehran
+- **operator:** Su Karlancer (interim) → any successor
+- **repo (public):** https://github.com/AmirSarani/karlancer-telegram-agent
+- **branch / HEAD:** `api-first-mcp-agent` @ `0a1dd9e`
+- **PR #1:** OPEN, MERGEABLE, CI green — **do not merge without owner**
+  https://github.com/AmirSarani/karlancer-telegram-agent/pull/1
+- **main:** still scaffold `6476fb3` (behind feature branch)
 
-## Current facts
+## Live production
 
 | Piece | Value |
-|-------|-------|
-| VPS | `77.221.156.164` `/opt/karlancer-telegram-agent` |
-| Service | running; Telegram `@KarlanserAlertbot`; `main_boot` **auth:true** |
-| UX SHA (pre-docs) | `0c3c952` Persian reply/inline keyboards |
-| Live rooms | GET `/api/rooms/?page=1` → **200**; Laravel pagination; **total≈1016**, **per_page=10**, **last_page≈102** |
-| Bid/chat POST | still `blocked_by_missing_api` until HAR → `VerifiedMutationContract` |
-| Tenant | `default` is not a wildcard; cross-tenant needs `cross_tenant_admin` or `super_admin` |
+|-------|--------|
+| VPS | `77.221.156.164` path `/opt/karlancer-telegram-agent` |
+| systemd | `karlancer-telegram-agent.service` **active** @ `0a1dd9e` |
+| Telegram | `@KarlanserAlertbot` owner chat `1366010187` |
+| Karlancer auth | `.env` has `KARLANCER_ACCESS_TOKEN`; boot `auth:true` |
+| Worker | embedded; jobs `messages.poll`, `health.ping`, `rooms.scan` running |
+| DB | `/opt/karlancer-telegram-agent/data/agent.sqlite` |
 
-## Deploy lesson (critical)
+## Architecture (one process)
 
-**Do not bash-source a JWT into remote `.env` via unquoted echo/source.** JWT characters break in shell. Prefer:
+`npm start` → Telegram long-poll + SQLite job queue + worker + optional MCP.
+- Reads: typed HTTP adapters to karlancer.com (from extension contracts).
+- Writes (bid/chat): **only** `VerifiedMutationContract` — currently **blocked_by_missing_api**.
+- AI/LLM: analysis, notes, proposal draft polish — **not** the send path.
+- Playwright: removed from production; CI guard.
 
-1. Write token to a local temp file (mode 600), **scp** to server, merge into `.env`, shred local.
-2. Or pipe via stdin to `deploy/scripts/install-karlancer-token.sh` (reads one line; no argv).
+## MCP
 
-Never commit tokens. Never paste into chat/logs.
+Transports: `npm run mcp` (stdio) · `npm run mcp:http` (Streamable HTTP, default `127.0.0.1:8787`).
+Auth: `MCP_API_KEY`; anon never admin; tools tenant-scoped (`default` is ordinary tenant).
+Key tools: `health.get`, `rooms.list`, `room.messages`, `project.get`, `project.list_invites`, `bids.check`, `bids.submit_plan`, `messages.send_plan`, `job.*`, `approvals.*`, `memory.*`, `pricing.*`, `intelligence.*`, `audit.search`.
+Resources: `karlancer://handoff`, `karlancer://project-state`, `karlancer://api-audit`, `karlancer://api-catalog`.
+Docs: `docs/MCP_TOOLS.md`, `docs/CONNECTING.md`, `configs/cursor-mcp.json.example`.
 
-## Last actions
+## Telegram UX (owner-only)
 
-1. Live rooms.list confirmed; shape notes in `EXPERIENCE.md` / `LIVE_SCAN.md`.
-2. Successor docs + playbook + stdin install script.
-3. Documented Telegram `/scan` → enqueues `rooms.scan` (owner-only).
+Reply menu: وضعیت · تأییدها · اسکن · مکث/ادامه · راهنما · **چت‌ها** · **خوانده‌نشده**
+Room card: ✅ تأیید ارسال · ❌ رد · 📝 نوت · 🔄 تازه‌سازی · 🤖 تحلیل AI
+Commands: `/start` `/help` `/status` `/scan` `/chats` `/unread` `/approvals` `/approve` `/reject` `/pause` `/resume` `/cancel`
+After `rooms.scan` / `messages.poll`: Persian summary / room cards pushed to owner.
+
+## Known live Karlancer API shapes
+
+- `GET /api/rooms/?page=N` → Laravel pagination; ~1016 rooms, 10/page (~102 pages) when last sampled.
+- `GET /api/rooms/{id}/messages-pg?page=N` → `data.messages.data[]` (paginated object).
+- Projects: resolve via slug in message HTML → `GET /api/publics/projects/{urlencoded-slug}`; do **not** trust `active_plan_id` as project id.
+- Sample unread focus (2026-09-20): room `7241431` / Ardeshir.A / project email extraction (fulltime; contact unlocked; prior bid 3M/3d).
 
 ## Blockers
 
-1. Bid/chat mutations blocked until verified HAR contract.
-2. Full invite triage across 102 pages not automated this session — owner can `/scan` or successor pages deeper.
-3. Do not merge PR #1 without owner.
+1. **messages.send / bids.submit** need HAR → `docs/HAR_CAPTURE.md` → `configs/verified-mutations.local.json` (gitignored).
+2. Login/refresh API absent — rotate `KARLANCER_ACCESS_TOKEN` manually when 401.
+3. Credential shared-by-default on process; per-tenant encrypted path optional not default.
+4. Root password + Telegram bot token were pasted in chat historically — **rotate if not already**.
+5. SQLite single-worker-consumer — no multi-writer scale-out.
+
+## Safety rules for successor
+
+- Never paste secrets in chat; use secret-request / scp / stdin install script.
+- Never bash-source unquoted JWT into `.env`.
+- No tryPost / guessed endpoints; no Playwright production.
+- Approve in Telegram without contract → draft/HITL only, honest block on real send.
+- Do not commit `state/LIVE_*.json`, `ROOM_*`, tokens, HAR raw with cookies.
 
 ## Next actions
 
-1. Owner: Telegram `/scan` (or reply-keyboard scan) while service running.
-2. Successor: unread-first / deeper pages; Persian invite summary; HITL proposal plans only.
-3. Capture redacted HAR for bid/chat; register contract.
-4. Keep appending to `EXPERIENCE.md`.
+1. Owner verifies Telegram چت‌ها / خوانده‌نشده cards day-to-day.
+2. Capture redacted HAR for chat send (+ bid if needed); register VerifiedMutationContract; redeploy.
+3. Optional: merge PR #1 only after owner approval.
+4. Append every live finding to `state/EXPERIENCE.md`.
 
-## Safety
+## Doc index
 
-- No secrets in git. `state/LIVE_SCAN.json` is gitignored (may contain guest names).
-- No unsolicited bid/chat POST.
-- Mutations: retries=0; unknown → `needs_reconciliation`.
+`docs/INTERIM_AGENT_PLAYBOOK.md`, `state/EXPERIENCE.md`, `docs/HAR_CAPTURE.md`, `docs/API_FIRST_AUDIT.md`, `docs/TEST_REPORT.md`, `IMPLEMENTATION_REPORT.md`, `docs/OPERATIONS.md`
