@@ -4,6 +4,7 @@
  */
 import { mergeNoteIntoDraft } from './room-state.js';
 import { buildDraftReply } from './draft-api.js';
+import { cleanHumanReply } from './reply-clean.js';
 
 /**
  * Adapt draft for ONE room using owner note + optional LLM.
@@ -37,7 +38,7 @@ export async function adaptDraftWithNote(opts = {}) {
   if (!note && mode !== 'analyze') {
     return {
       ok: true,
-      text: baseDraft,
+      text: cleanHumanReply(baseDraft),
       source: 'template',
       llmUsed: false,
     };
@@ -46,7 +47,7 @@ export async function adaptDraftWithNote(opts = {}) {
   if (!llm || typeof llm.draftChatReply !== 'function') {
     return {
       ok: true,
-      text: merged.text,
+      text: cleanHumanReply(merged.text),
       source: merged.source,
       llmUsed: false,
       reason: 'llm_disabled',
@@ -85,7 +86,7 @@ export async function adaptDraftWithNote(opts = {}) {
     if (out?.ok && reply && String(reply).trim()) {
       return {
         ok: true,
-        text: String(reply).trim().slice(0, 4000),
+        text: cleanHumanReply(String(reply).trim()).slice(0, 4000),
         source: 'llm+note',
         llmUsed: true,
         confidence: out.data?.confidence,
@@ -97,7 +98,7 @@ export async function adaptDraftWithNote(opts = {}) {
 
   return {
     ok: true,
-    text: merged.text,
+    text: cleanHumanReply(merged.text),
     source: merged.source,
     llmUsed: false,
     reason: 'llm_fallback',

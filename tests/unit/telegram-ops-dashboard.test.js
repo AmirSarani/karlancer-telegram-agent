@@ -23,6 +23,7 @@ import {
 import {
   formatRoomsList,
   formatRoomCard,
+  formatRoomTechDetails,
   formatSendConfirmPreview,
   roomsListKeyboard,
   roomCardKeyboard,
@@ -126,12 +127,12 @@ test('conversation list cards hide Room # and expose view/ai/note', () => {
   const data = list.keyboard.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(data.includes('room:open:99'));
   assert.ok(data.includes('room:ai:99'));
-  assert.ok(data.includes('room:note:99'));
+  assert.ok(data.includes('room:dft:99'));
   for (const row of list.keyboard.inline_keyboard) assert.ok(row.length <= 2);
 });
 
-test('conversation detail keeps Room ID only in details section', () => {
-  const text = formatRoomCard({
+test('conversation detail User View hides Room ID; tech details keep it', () => {
+  const card = {
     roomId: 7241431,
     guestName: 'Ali',
     unread: 1,
@@ -139,13 +140,20 @@ test('conversation detail keeps Room ID only in details section', () => {
     messages: [{ text: 'سلام', isOwn: false }],
     draftText: 'پاسخ',
     sendApiLive: false,
-  });
+  };
+  const text = formatRoomCard(card);
   assert.doesNotMatch(text, /گفتگو #7241431/);
-  assert.match(text, /شناسه گفتگو: 7241431/);
+  assert.doesNotMatch(text, /7241431/);
+  assert.doesNotMatch(text, /blocked_by_missing_api/);
   assert.match(text, /آخرین پیام/);
+  assert.match(text, /پروژه تست/);
+  const tech = formatRoomTechDetails(card);
+  assert.match(tech, /شناسه گفتگو: 7241431/);
   const kb = roomCardKeyboard(7241431);
   for (const row of kb.inline_keyboard) assert.ok(row.length <= 2);
   assert.ok(kb.inline_keyboard.flat().some((b) => b.callback_data === 'room:done:7241431'));
+  assert.ok(kb.inline_keyboard.flat().some((b) => b.callback_data === 'room:dft:7241431'));
+  assert.ok(kb.inline_keyboard.flat().some((b) => b.callback_data === 'room:tch:7241431'));
 });
 
 test('priority badges never bare white circle', () => {

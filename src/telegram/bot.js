@@ -882,6 +882,26 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
         await roomFlows.runAiAnalyze(ctx, rid);
         return;
       }
+      if (parsed.type === 'room_messages') {
+        await ctx.answerCallbackQuery({ text: 'پیام‌ها…' });
+        await roomFlows.replyRoomMessages(ctx, rid, { edit: true });
+        return;
+      }
+      if (parsed.type === 'room_draft') {
+        await ctx.answerCallbackQuery({ text: 'پیش‌نویس…' });
+        await roomFlows.replyDraftScreen(ctx, rid, { edit: true });
+        return;
+      }
+      if (parsed.type === 'room_tech') {
+        await ctx.answerCallbackQuery({ text: 'جزئیات فنی…' });
+        await roomFlows.replyRoomTech(ctx, rid, { edit: true });
+        return;
+      }
+      if (parsed.type === 'room_regen') {
+        await ctx.answerCallbackQuery({ text: 'تولید دوباره…' });
+        await roomFlows.replyDraftScreen(ctx, rid, { edit: true, regenerate: true });
+        return;
+      }
     }
 
     if (parsed.type === 'approve' || parsed.type === 'reject') {

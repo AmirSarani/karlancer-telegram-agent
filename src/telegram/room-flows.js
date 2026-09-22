@@ -11,9 +11,17 @@ import {
   formatRoomsList,
   formatSendConfirmPreview,
   formatAiAnalysisCard,
+  formatRoomTechDetails,
+  formatRoomMessagesView,
+  formatDraftScreen,
   roomCardKeyboard,
   roomConfirmKeyboard,
+  roomDraftKeyboard,
+  roomMessagesKeyboard,
+  roomTechKeyboard,
 } from './room-card.js';
+import { buildDraftReply } from '../agent/draft-api.js';
+import { cleanHumanReply } from '../agent/reply-clean.js';
 import {
   formatLoading,
   formatComplete,
@@ -342,7 +350,7 @@ export function createRoomFlows(deps) {
     });
 
     roomState.setDraft(roomId, {
-      text: adapted.text,
+      text: cleanHumanReply(adapted.text),
       source: adapted.source,
       meta: { llmUsed: adapted.llmUsed },
     });
@@ -408,7 +416,7 @@ export function createRoomFlows(deps) {
     });
     let draftUpdated = false;
     if (adapted.text) {
-      roomState.setDraft(roomId, { text: adapted.text, source: adapted.source });
+      roomState.setDraft(roomId, { text: cleanHumanReply(adapted.text), source: adapted.source });
       roomState.setDecision(roomId, { status: 'pending' });
       draftUpdated = true;
     }
@@ -422,10 +430,114 @@ export function createRoomFlows(deps) {
     );
   }
 
+
+  function enrichCard(roomId, card = {}) {
+    return {
+      ...card,
+      roomId: card.roomId ?? roomId,
+      sendApiLive: sendApiLive(),
+      decisionStatus: roomState.getDecision(roomId)?.status || card.decisionStatus,
+      draftText: roomState.getDraft(roomId)?.text || card.draftText,
+      ownerNote: roomState.getNote(roomId)?.text || card.ownerNote,
+    };
+  }
+
+  async function replyRoomMessages(ctx, roomId, { edit = false } = {}) {
+    let card = await buildFreshCard(roomId);
+    if (!card) card = roomState.getCard(roomId);
+    if (!card) {
+      await replyRoomCard(ctx, roomId, { edit });
+      return;
+    }
+    card = enrichCard(roomId, card);
+    await editOrReply(
+      ctx,
+      formatRoomMessagesView(card),
+      { reply_markup: roomMessagesKeyboard(roomId) },
+      { edit }
+    );
+  }
+
+  async function replyRoomTech(ctx, roomId, { edit = false } = {}) {
+    let card = await buildFreshCard(roomId);
+    if (!card) card = roomState.getCard(roomId);
+    if (!card) {
+      await replyRoomCard(ctx, roomId, { edit });
+      return;
+    }
+    card = enrichCard(roomId, card);
+    await editOrReply(
+      ctx,
+      formatRoomTechDetails(card),
+      { reply_markup: roomTechKeyboard(roomId) },
+      { edit }
+    );
+  }
+
+  async function replyDraftScreen(ctx, roomId, { edit = false, regenerate = false } = {}) {
+    let card = (await buildFreshCard(roomId)) || roomState.getCard(roomId) || { roomId };
+    card = enrichCard(roomId, card);
+
+    let draftText = roomState.getDraft(roomId)?.text || card.draftText || '';
+    if (regenerate || !String(draftText).trim()) {
+      if (ctx.callbackQuery) {
+        try {
+          await ctx.editMessageText(formatLoading('ai'), {
+            reply_markup: roomDraftKeyboard(roomId),
+          });
+        } catch {
+          await ctx.reply(formatLoading('ai'), menuOpts());
+        }
+      }
+      const built = buildDraftReply({
+        roomId,
+        guestName: card.guestName,
+        project: card.project,
+        messages: card.messages,
+        ownerNote: roomState.getNote(roomId)?.text || '',
+      });
+      // Optional LLM polish when available
+      const adapted = await adaptDraftWithNote({
+        roomContext: {
+          roomId,
+          guestName: card.guestName,
+          project: card.project,
+          messages: card.messages,
+        },
+        currentDraft: built.text,
+        ownerNote:
+          roomState.getNote(roomId)?.text ||
+          'پیش‌نویس را طبیعی، کوتاه و حرفه‌ای بنویس؛ مثل فریلنسر واقعی.',
+        llm,
+        mode: regenerate ? 'analyze' : 'note',
+      });
+      draftText = cleanHumanReply(adapted.text || built.text);
+      roomState.setDraft(roomId, {
+        text: draftText,
+        source: adapted.source || built.source,
+      });
+      roomState.setDecision(roomId, { status: 'pending' });
+      card.draftText = draftText;
+    } else {
+      draftText = cleanHumanReply(draftText);
+      card.draftText = draftText;
+    }
+
+    await editOrReply(
+      ctx,
+      formatDraftScreen(card),
+      { reply_markup: roomDraftKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) || edit }
+    );
+  }
+
   return {
     roomState,
     replyRoomsList,
     replyRoomCard,
+    replyRoomMessages,
+    replyRoomTech,
+    replyDraftScreen,
     showSendConfirm,
     approveSend,
     rejectRoom,

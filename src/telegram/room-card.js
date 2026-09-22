@@ -1,8 +1,9 @@
 /**
- * Telegram room / chat cards — SaaS-style ops dashboard UX.
+ * Telegram room / chat cards — User View (default) vs Technical Details.
  */
 import { InlineKeyboard } from 'grammy';
 import { redactString } from '../security/redaction.js';
+import { cleanHumanReply, detectMessageSender } from '../agent/reply-clean.js';
 import {
   truncatePersianText,
   formatRelativeTime,
@@ -34,20 +35,64 @@ function addPairs(kb, pairs) {
 export const ROOMS_PAGE_SIZE = 5;
 
 /**
- * Chat detail card actions: AI Summary / Note / Approve / Reject / Refresh / Back / Home
+ * User View detail actions (max 2 per row).
  * @param {string|number} roomId
  */
 export function roomCardKeyboard(roomId) {
   const id = String(roomId);
   return addPairs(new InlineKeyboard(), [
+    ['👀 پیام‌ها', `room:msg:${id}`],
     ['🤖 تحلیل AI', `room:ai:${id}`],
-    ['📝 نوت', `room:note:${id}`],
-    ['✅ تأیید ارسال', `room:ok:${id}`],
-    ['❌ رد', `room:no:${id}`],
-    ['✅ بررسی شد', `room:done:${id}`],
+    ['📝 پیش‌نویس پاسخ', `room:dft:${id}`],
     ['🔄 بروزرسانی', `room:ref:${id}`],
+    ['⚙️ جزئیات فنی', `room:tch:${id}`],
+    ['✅ بررسی شد', `room:done:${id}`],
     ['⬅️ بازگشت', 'goto:chats'],
     ['🏠 خانه', 'nav:home'],
+  ]);
+}
+
+/**
+ * Draft reply screen keyboard.
+ * ✅ تأیید → existing approval path (room:ok → confirm preview).
+ * @param {string|number} roomId
+ */
+export function roomDraftKeyboard(roomId) {
+  const id = String(roomId);
+  return addPairs(new InlineKeyboard(), [
+    ['✏️ ویرایش', `room:note:${id}`],
+    ['🔄 تولید دوباره', `room:rgn:${id}`],
+    ['✅ تأیید', `room:ok:${id}`],
+    ['❌ لغو', `room:open:${id}`],
+    ['⬅️ بازگشت', `room:open:${id}`],
+    ['🏠 خانه', 'nav:home'],
+  ]);
+}
+
+/**
+ * Messages-only view keyboard.
+ * @param {string|number} roomId
+ */
+export function roomMessagesKeyboard(roomId) {
+  const id = String(roomId);
+  return addPairs(new InlineKeyboard(), [
+    ['📝 پیش‌نویس پاسخ', `room:dft:${id}`],
+    ['🤖 تحلیل AI', `room:ai:${id}`],
+    ['⬅️ بازگشت', `room:open:${id}`],
+    ['🏠 خانه', 'nav:home'],
+  ]);
+}
+
+/**
+ * Technical details keyboard.
+ * @param {string|number} roomId
+ */
+export function roomTechKeyboard(roomId) {
+  const id = String(roomId);
+  return addPairs(new InlineKeyboard(), [
+    ['⬅️ بازگشت', `room:open:${id}`],
+    ['🏠 خانه', 'nav:home'],
+    ['🔄 بروزرسانی', `room:ref:${id}`],
   ]);
 }
 
@@ -60,7 +105,7 @@ export function roomConfirmKeyboard(roomId) {
   return addPairs(new InlineKeyboard(), [
     ['✅ تأیید', `room:cfm:${id}`],
     ['❌ رد', `room:ccl:${id}`],
-    ['⬅️ بازگشت', `room:open:${id}`],
+    ['⬅️ بازگشت', `room:dft:${id}`],
     ['🏠 خانه', 'nav:home'],
   ]);
 }
@@ -92,7 +137,7 @@ export function roomsListKeyboard(pageRooms, { page = 1, totalPages = 1, unreadO
     kb.text(`👁 ${badge.emoji} ${name}`, `room:open:${id}`)
       .text('🤖 تحلیل AI', `room:ai:${id}`)
       .row()
-      .text('📝 نوت', `room:note:${id}`)
+      .text('📝 پیش‌نویس', `room:dft:${id}`)
       .row();
   }
 
@@ -114,7 +159,10 @@ export function roomsListKeyboard(pageRooms, { page = 1, totalPages = 1, unreadO
  */
 export function parseRoomCallback(data) {
   if (typeof data !== 'string' || !data) return null;
-  const m = /^room:(open|ok|no|note|ref|ai|cfm|ccl|done):([0-9A-Za-z_-]{1,24})$/.exec(data);
+  const m =
+    /^room:(open|ok|no|note|ref|ai|cfm|ccl|done|msg|dft|tch|rgn):([0-9A-Za-z_-]{1,24})$/.exec(
+      data
+    );
   if (!m) return null;
   const map = {
     open: 'room_open',
@@ -126,6 +174,10 @@ export function parseRoomCallback(data) {
     cfm: 'room_confirm_send',
     ccl: 'room_cancel_confirm',
     done: 'room_done',
+    msg: 'room_messages',
+    dft: 'room_draft',
+    tch: 'room_tech',
+    rgn: 'room_regen',
   };
   return { type: map[m[1]], roomId: m[2] };
 }
@@ -149,9 +201,7 @@ export function formatRoomListItem(room, index = 0) {
     lines: 2,
   });
   const when = room.updatedAt || room.updated_at || room.lastMessageAt || null;
-  const lines = [
-    `${toFaNum(index + 1)}. ${badge.line} · ${name}`,
-  ];
+  const lines = [`${toFaNum(index + 1)}. ${badge.line} · ${name}`];
   if (projectTitle) {
     lines.push(`   📁 ${truncatePersianText(String(projectTitle), { max: 48, lines: 1 })}`);
   }
@@ -206,7 +256,7 @@ export function formatRoomsList(
       keyboard: roomOpenKeyboard(r.roomId ?? r.id),
     });
   }
-  lines.push('از دکمه‌ها: مشاهده · تحلیل AI · نوت');
+  lines.push('از دکمه‌ها: مشاهده · تحلیل AI · پیش‌نویس');
 
   return {
     text: lines.join('\n'),
@@ -219,69 +269,126 @@ export function formatRoomsList(
 }
 
 /**
- * Full room detail card.
+ * User View — clean Persian card (default). No IDs / slugs / API dump.
  * @param {object} card
  */
 export function formatRoomCard(card = {}) {
-  const roomId = card.roomId ?? card.id ?? '—';
   const guest = card.guestName || card.guest_name || '—';
   const unread = card.unread != null ? Number(card.unread) : null;
   const project = card.project || {};
   const decision = card.decisionStatus || 'pending';
-  const draft = card.draftText || card.draft?.text || '';
+  const draft = cleanHumanReply(redactString(String(card.draftText || card.draft?.text || '')));
   const note = card.ownerNote || card.note?.text || '';
   const messages = Array.isArray(card.messages) ? card.messages : [];
-  const files = Array.isArray(card.attachments) ? card.attachments : [];
-  const sendStatus = card.sendStatus || null;
-
   const badge = priorityBadge({ unread, reason: card.priorityReason, ...card });
+
+  const title = project.title || card.projectTitle || null;
+  const minB = project.minBudget ?? project.min_budget;
+  const maxB = project.maxBudget ?? project.max_budget;
+  const dur = project.jobDuration ?? project.job_duration ?? project.duration;
+  const when =
+    card.updatedAt ||
+    card.updated_at ||
+    card.lastMessageAt ||
+    null;
+
   const lines = [
     `🗂 گفتگو · ${badge.line}`,
     '————————',
     '',
-    '👤 طرف گفتگو',
-    `• نام: ${redactString(String(guest))}`,
-    unread != null ? `• خوانده‌نشده: ${toFaNum(unread)}` : null,
-    card.updatedAt ? `• به‌روزرسانی: ${formatAgeFa(card.updatedAt)}` : null,
-    decisionLine(decision),
-    sendStatus ? `• وضعیت ارسال: ${sendStatus}` : null,
-  ].filter((x) => x != null);
+    '👤 کارفرما',
+    redactString(String(guest)),
+  ];
 
-  if (project.title || project.id || card.projectSlug) {
+  if (title || minB != null || maxB != null || dur != null) {
     lines.push('', '📁 پروژه');
-    if (project.title) lines.push(`• عنوان: ${truncatePreview(project.title, 80)}`);
-    if (project.id) lines.push(`• شناسه: ${project.id}`);
-    if (card.projectSlug) lines.push(`• اسلاگ: ${truncatePreview(card.projectSlug, 60)}`);
-    const minB = project.minBudget ?? project.min_budget;
-    const maxB = project.maxBudget ?? project.max_budget;
+    if (title) {
+      lines.push(`• عنوان: ${truncatePersianText(String(title), { max: 80, lines: 2 })}`);
+    }
     if (minB != null || maxB != null) {
-      lines.push(`• بودجه: ${fmtNum(minB)} – ${fmtNum(maxB)}`);
+      lines.push(`• بودجه: ${formatBudgetFa(minB, maxB)}`);
     }
-    const dur = project.jobDuration ?? project.job_duration ?? project.duration;
-    if (dur != null) lines.push(`• مدت: ${dur} روز`);
-    if (project.hireDeadline || project.hire_deadline) {
-      lines.push(`• مهلت استخدام: ${formatAgeFa(project.hireDeadline || project.hire_deadline)}`);
+    if (dur != null && String(dur).trim() !== '') {
+      lines.push(`• مدت: ${formatDurationFa(dur)}`);
     }
-    const ft = project.isFulltime ?? project.is_fulltime;
-    if (ft === true || ft === 1) lines.push('• تمام‌وقت: بله');
-    if (project.isUrgent || project.is_urgent) lines.push('• فوری: بله');
   }
 
+  if (when) lines.push(`• آخرین فعالیت: ${formatAgeFa(when)}`);
+  if (unread != null && unread > 0) {
+    lines.push(`• پیام جدید: ${toFaNum(unread)}`);
+  }
+  lines.push(decisionLine(decision));
+
+  const msgBlock = formatLastMessagesBlock(messages, { max: 5 });
+  if (msgBlock) {
+    lines.push('', msgBlock);
+  }
+
+  if (draft) {
+    lines.push(
+      '',
+      '📝 پیش‌نویس',
+      truncatePersianText(draft, { max: 220, lines: 4 }),
+      'وضعیت: آماده بررسی — برای متن کامل «پیش‌نویس پاسخ» را بزنید.'
+    );
+  } else {
+    lines.push('', '📝 پیش‌نویس هنوز آماده نیست — از «پیش‌نویس پاسخ» بسازید.');
+  }
+
+  if (note) {
+    lines.push(
+      '',
+      `📌 نوت شما: ${truncatePersianText(redactString(String(note)), { max: 160, lines: 2 })}`
+    );
+  }
+
+  let text = lines.filter((x) => x != null).join('\n');
+  if (text.length > 3900) {
+    text = text.slice(0, 3890) + '\n…';
+  }
+  return text;
+}
+
+/**
+ * Technical details only — IDs, slugs, API flags. Not the default view.
+ * @param {object} card
+ */
+export function formatRoomTechDetails(card = {}) {
+  const roomId = card.roomId ?? card.id ?? '—';
+  const project = card.project || {};
+  const files = Array.isArray(card.attachments) ? card.attachments : [];
+  const sendStatus = card.sendStatus || null;
+  const lines = [
+    '⚙️ جزئیات فنی',
+    '————————',
+    '',
+    `• شناسه گفتگو: ${roomId}`,
+  ];
+  if (project.id) lines.push(`• شناسه پروژه: ${project.id}`);
+  if (card.projectSlug) {
+    lines.push(`• اسلاگ: ${truncatePreview(card.projectSlug, 60)}`);
+  }
+  const ft = project.isFulltime ?? project.is_fulltime;
+  if (ft === true || ft === 1) lines.push('• تمام‌وقت: بله');
+  if (project.isUrgent || project.is_urgent) lines.push('• فوری: بله');
+  if (project.hireDeadline || project.hire_deadline) {
+    lines.push(
+      `• مهلت استخدام: ${formatAgeFa(project.hireDeadline || project.hire_deadline)}`
+    );
+  }
   if (card.proposalPrice != null) {
-    lines.push(`• پیشنهاد قیمت: ${fmtNum(card.proposalPrice)}`);
+    lines.push(`• پیشنهاد قیمت (داخلی): ${fmtNum(card.proposalPrice)}`);
   }
   if (card.proposalDays != null) {
-    lines.push(`• پیشنهاد مدت: ${card.proposalDays} روز`);
+    lines.push(`• پیشنهاد مدت (داخلی): ${card.proposalDays} روز`);
   }
-
-  const lastN = messages.slice(-5);
-  if (lastN.length) {
-    lines.push('', '💬 آخرین پیام‌ها');
-    for (const m of lastN) {
-      const who = m.isOwn === true ? 'من' : m.isOwn === false ? 'کارفرما' : '?';
-      const t = truncatePreview(m.text || '', 120);
-      lines.push(`• [${who}] ${t}`);
-    }
+  if (sendStatus) lines.push(`• وضعیت ارسال: ${sendStatus}`);
+  lines.push(
+    `• مسیر ارسال: ${card.sendApiLive ? 'آماده (قرارداد تأییدشده)' : 'فعلاً غیرفعال'}`
+  );
+  if (!card.sendApiLive) {
+    lines.push('• توضیح: ارسال واقعی پس از آماده‌شدن مسیر API');
+    lines.push('• کد داخلی: blocked_by_missing_api');
   }
 
   if (files.length) {
@@ -294,33 +401,72 @@ export function formatRoomCard(card = {}) {
     lines.push('', `📎 ${card.attachmentsNote}`);
   }
 
-  lines.push('', '📊 جزئیات');
-  lines.push(`• شناسه گفتگو: ${roomId}`);
+  lines.push('', 'این صفحه فقط برای عیب‌یابی است؛ نمای اصلی کارت گفتگو است.');
+  return lines.join('\n');
+}
 
-  lines.push('', '📝 پیش‌نویس پاسخ');
+/**
+ * Friendly last-messages block.
+ * @param {object[]} messages
+ * @param {{ max?: number, title?: boolean }} [opts]
+ */
+export function formatLastMessagesBlock(messages = [], { max = 8, title = true } = {}) {
+  const lastN = (Array.isArray(messages) ? messages : []).slice(-max);
+  if (!lastN.length) return '';
+  const lines = title ? ['💬 آخرین پیام‌ها'] : [];
+  for (const m of lastN) {
+    const who = senderLabelFa(detectMessageSender(m));
+    const t = truncatePersianText(stripMsgMarkers(m.text || ''), {
+      max: 140,
+      lines: 2,
+    });
+    if (!t) continue;
+    lines.push(`${who} ${t}`);
+  }
+  return lines.length > (title ? 1 : 0) ? lines.join('\n') : '';
+}
+
+/**
+ * Standalone messages screen.
+ * @param {object} card
+ */
+export function formatRoomMessagesView(card = {}) {
+  const guest = card.guestName || card.guest_name || 'کارفرما';
+  const messages = Array.isArray(card.messages) ? card.messages : [];
+  const block = formatLastMessagesBlock(messages, { max: 10, title: true });
+  return [
+    '💬 پیام‌های گفتگو',
+    '————————',
+    '',
+    `👤 ${redactString(String(guest))}`,
+    '',
+    block || 'هنوز پیامی برای نمایش نیست.',
+  ].join('\n');
+}
+
+/**
+ * Draft reply screen UX.
+ * @param {object} card
+ */
+export function formatDraftScreen(card = {}) {
+  const draft = cleanHumanReply(redactString(String(card.draftText || card.draft?.text || '')));
+  const guest = card.guestName || card.guest_name || 'کارفرما';
+  const lines = [
+    '📝 پیش‌نویس پاسخ',
+    '————————',
+    '',
+    `برای: ${redactString(String(guest))}`,
+    '',
+  ];
   if (draft) {
-    lines.push(redactString(String(draft)).slice(0, 1500));
+    lines.push(redactString(draft).slice(0, 2800));
+    lines.push('', 'وضعیت: ✅ آماده بررسی');
   } else {
-    lines.push('(هنوز پیش‌نویسی نیست — نوت یا تحلیل AI بزنید)');
+    lines.push('(هنوز متنی نیست — «تولید دوباره» یا ویرایش را بزنید.)');
+    lines.push('', 'وضعیت: ⏳ در انتظار پیش‌نویس');
   }
-
-  if (note) {
-    lines.push('', `📌 نوت شما: ${redactString(String(note)).slice(0, 400)}`);
-  }
-
-  if (!card.sendApiLive) {
-    lines.push(
-      '',
-      'ℹ️ ارسال واقعی فعلاً فعال نیست (blocked_by_missing_api).',
-      'تأیید شما ثبت می‌شود؛ ارسال پس از آماده‌شدن مسیر ارسال.'
-    );
-  }
-
-  let text = lines.join('\n');
-  if (text.length > 3900) {
-    text = text.slice(0, 3890) + '\n…';
-  }
-  return text;
+  lines.push('', 'تأیید → پیش‌نمایش و ثبت تأیید (ارسال واقعی طبق قرارداد).');
+  return lines.join('\n');
 }
 
 /**
@@ -329,14 +475,15 @@ export function formatRoomCard(card = {}) {
 export function formatSendConfirmPreview(card = {}) {
   const roomId = card.roomId ?? card.id ?? '—';
   const guest = card.guestName || card.guest_name || '—';
-  const draft = redactString(String(card.draftText || card.draft?.text || '')).slice(0, 1200);
+  const draft = cleanHumanReply(
+    redactString(String(card.draftText || card.draft?.text || ''))
+  ).slice(0, 1200);
   const lines = [
     '⚠️ تأیید قبل از ارسال',
     '————————',
     '',
     '• عملیات: ارسال پیام',
     `• مقصد: ${redactString(String(guest))}`,
-    `• گفتگو (جزئیات): ${roomId}`,
     '',
     '📤 پیش‌نمایش متن:',
     draft || '(خالی)',
@@ -351,7 +498,8 @@ export function formatSendConfirmPreview(card = {}) {
   } else {
     lines.push('با تأیید، پیام در صف ارسال قرار می‌گیرد.', '');
   }
-  lines.push('✅ تأیید · ❌ رد · یا بازگشت');
+  lines.push(`(جزئیات داخلی گفتگو: ${roomId})`);
+  lines.push('', '✅ تأیید · ❌ رد · یا بازگشت');
   return lines.join('\n');
 }
 
@@ -377,18 +525,21 @@ export function formatAiAnalysisCard(analysis = {}, meta = {}) {
   const reason =
     data.reason ||
     data.rationale ||
-    (summary ? truncatePreview(summary, 280) : analysis.ok ? '—' : 'مدل در دسترس نبود یا خطا رخ داد');
+    (summary
+      ? truncatePreview(summary, 280)
+      : analysis.ok
+        ? '—'
+        : 'مدل در دسترس نبود یا خطا رخ داد');
 
   const lines = [
     '🤖 خلاصه تحلیل AI',
     '————————',
     '',
-    meta.roomId != null ? `• گفتگو (جزئیات): ${meta.roomId}` : null,
     `• ریسک: ${riskEmoji(risk)} ${risk}`,
     `• نیت: ${intent}`,
     `• اقدام پیشنهادی: ${action}`,
     `• دلیل: ${reason}`,
-  ].filter((x) => x != null);
+  ];
 
   if (summary && summary !== reason) {
     lines.push('', '📄 جزئیات', summary.slice(0, 600));
@@ -398,7 +549,35 @@ export function formatAiAnalysisCard(analysis = {}, meta = {}) {
   } else if (analysis.ok === false) {
     lines.push('', 'ℹ️ پیش‌نویس بدون تغییر مدل به‌روز نشد.');
   }
+  lines.push('', 'از «پیش‌نویس پاسخ» متن را ببینید یا ویرایش کنید.');
   return lines.join('\n');
+}
+
+function senderLabelFa(kind) {
+  if (kind === 'you') return '👤 شما:';
+  if (kind === 'employer') return '👤 کارفرما:';
+  return '👤 طرف گفتگو:';
+}
+
+function stripMsgMarkers(text) {
+  return String(text || '')
+    .replace(/\[\s*\?\s*\]/g, '')
+    .replace(/\[\s*(me|own|guest|employer|unknown)\s*\]/gi, '')
+    .replace(/^\s*[•\-–]\s*/, '')
+    .trim();
+}
+
+function formatBudgetFa(minB, maxB) {
+  if (minB != null && maxB != null) return `${fmtNum(minB)} – ${fmtNum(maxB)} تومان`;
+  if (minB != null) return `از ${fmtNum(minB)} تومان`;
+  if (maxB != null) return `تا ${fmtNum(maxB)} تومان`;
+  return '—';
+}
+
+function formatDurationFa(dur) {
+  const n = Number(dur);
+  if (Number.isFinite(n)) return `${toFaNum(n)} روز`;
+  return String(dur);
 }
 
 function inferRisk(summary, ok) {
@@ -430,7 +609,7 @@ function decisionLine(status) {
   if (status === 'rejected') return '• وضعیت: ❌ رد شده';
   if (status === 'blocked') return '• وضعیت: ⛔ ارسال فعلاً فعال نیست';
   if (status === 'reviewed') return '• وضعیت: ✅ بررسی شد';
-  return '• وضعیت: ⏳ در انتظار';
+  return '• وضعیت: ⏳ در انتظار بررسی';
 }
 
 function fmtNum(n) {
@@ -469,11 +648,18 @@ export function extractProposalHints(text) {
 
 export default {
   roomCardKeyboard,
+  roomDraftKeyboard,
+  roomMessagesKeyboard,
+  roomTechKeyboard,
   roomConfirmKeyboard,
   roomOpenKeyboard,
   roomsListKeyboard,
   parseRoomCallback,
   formatRoomCard,
+  formatRoomTechDetails,
+  formatRoomMessagesView,
+  formatLastMessagesBlock,
+  formatDraftScreen,
   formatRoomsList,
   formatRoomListItem,
   formatSendConfirmPreview,

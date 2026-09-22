@@ -2,7 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatRoomCard,
+  formatRoomTechDetails,
+  formatRoomMessagesView,
+  formatDraftScreen,
+  formatLastMessagesBlock,
   roomCardKeyboard,
+  roomDraftKeyboard,
   roomConfirmKeyboard,
   roomsListKeyboard,
   parseRoomCallback,
@@ -13,18 +18,30 @@ import {
 } from '../../src/telegram/room-card.js';
 import { parseCallbackData } from '../../src/telegram/ui.js';
 
-test('roomCardKeyboard has AI/note/approve/reject/back/home under 64 bytes', () => {
+test('roomCardKeyboard has messages/ai/draft/tech/back under 64 bytes', () => {
   const kb = roomCardKeyboard(7241431);
   const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
-  assert.ok(data.includes('room:ok:7241431'));
-  assert.ok(data.includes('room:no:7241431'));
-  assert.ok(data.includes('room:note:7241431'));
-  assert.ok(data.includes('room:ref:7241431'));
+  assert.ok(data.includes('room:msg:7241431'));
   assert.ok(data.includes('room:ai:7241431'));
+  assert.ok(data.includes('room:dft:7241431'));
+  assert.ok(data.includes('room:tch:7241431'));
+  assert.ok(data.includes('room:ref:7241431'));
+  assert.ok(data.includes('room:done:7241431'));
   assert.ok(data.includes('goto:chats'));
   assert.ok(data.includes('nav:home'));
-  assert.ok(data.includes('room:done:7241431'));
+  // Approve lives on draft screen, not main user card
+  assert.ok(!data.includes('room:ok:7241431'));
   for (const d of data) assert.ok(d.length <= 64);
+  for (const row of kb.inline_keyboard) assert.ok(row.length <= 2);
+});
+
+test('roomDraftKeyboard has edit/regen/approve/cancel', () => {
+  const kb = roomDraftKeyboard(9);
+  const data = kb.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(data.includes('room:note:9'));
+  assert.ok(data.includes('room:rgn:9'));
+  assert.ok(data.includes('room:ok:9'));
+  assert.ok(data.includes('room:open:9'));
   for (const row of kb.inline_keyboard) assert.ok(row.length <= 2);
 });
 
@@ -35,15 +52,19 @@ test('roomConfirmKeyboard confirm/cancel', () => {
   assert.ok(data.includes('room:ccl:9'));
 });
 
-test('parseRoomCallback includes cfm/ccl', () => {
+test('parseRoomCallback includes new msg/dft/tch/rgn', () => {
   assert.deepEqual(parseRoomCallback('room:open:7241431'), { type: 'room_open', roomId: '7241431' });
   assert.deepEqual(parseCallbackData('room:ok:9'), { type: 'room_approve', roomId: '9' });
   assert.deepEqual(parseCallbackData('room:cfm:9'), { type: 'room_confirm_send', roomId: '9' });
   assert.deepEqual(parseCallbackData('room:ccl:9'), { type: 'room_cancel_confirm', roomId: '9' });
+  assert.deepEqual(parseCallbackData('room:msg:9'), { type: 'room_messages', roomId: '9' });
+  assert.deepEqual(parseCallbackData('room:dft:9'), { type: 'room_draft', roomId: '9' });
+  assert.deepEqual(parseCallbackData('room:tch:9'), { type: 'room_tech', roomId: '9' });
+  assert.deepEqual(parseCallbackData('room:rgn:9'), { type: 'room_regen', roomId: '9' });
   assert.equal(parseRoomCallback('evil'), null);
 });
 
-test('formatRoomCard includes project budget and draft; redacts bearer', () => {
+test('formatRoomCard User View hides ids/slugs/api; shows human project card', () => {
   const text = formatRoomCard({
     roomId: 7241431,
     guestName: 'کارفرما',
@@ -56,20 +77,67 @@ test('formatRoomCard includes project budget and draft; redacts bearer', () => {
       jobDuration: 5,
       isFulltime: true,
     },
-    messages: [{ text: 'سلام', isOwn: false }],
+    projectSlug: 'extract-email',
+    messages: [{ text: 'سلام', isOwn: false }, { text: '[?] چشم', isOwn: true }],
     draftText: 'پیش‌نویس تست Bearer SECRETTOKEN123',
     sendApiLive: false,
   });
-  assert.match(text, /7241431/);
-  assert.match(text, /شناسه گفتگو/);
-  assert.doesNotMatch(text, /گفتگو #7241431/);
+  assert.doesNotMatch(text, /7241431/);
+  assert.doesNotMatch(text, /327343/);
+  assert.doesNotMatch(text, /extract-email|اسلاگ|اسلاگ/);
+  assert.doesNotMatch(text, /blocked_by_missing_api/);
+  assert.doesNotMatch(text, /SECRETTOKEN123/);
+  assert.doesNotMatch(text, /\[\?\]/);
   assert.match(text, /استخراج ایمیل/);
   assert.match(text, /بودجه/);
-  assert.match(text, /تمام‌وقت/);
+  assert.match(text, /کارفرما/);
+  assert.match(text, /شما/);
   assert.match(text, /پیش‌نویس/);
-  assert.match(text, /blocked_by_missing_api/);
-  assert.match(text, /\[REDACTED\]/);
-  assert.doesNotMatch(text, /SECRETTOKEN123/);
+  assert.match(text, /REDACTED/);
+});
+
+test('formatRoomTechDetails holds ids and send path honesty', () => {
+  const text = formatRoomTechDetails({
+    roomId: 7241431,
+    project: { id: '327343' },
+    projectSlug: 'extract-email',
+    sendApiLive: false,
+  });
+  assert.match(text, /شناسه گفتگو: 7241431/);
+  assert.match(text, /327343/);
+  assert.match(text, /extract-email/);
+  assert.match(text, /blocked|غیرفعال/);
+});
+
+test('formatLastMessagesBlock and messages view are friendly', () => {
+  const block = formatLastMessagesBlock(
+    [
+      { text: '[?] سلام', isOwn: false },
+      { text: 'در خدمتم', isOwn: true },
+    ],
+    { max: 5 }
+  );
+  assert.match(block, /آخرین پیام/);
+  assert.match(block, /کارفرما/);
+  assert.match(block, /شما/);
+  assert.doesNotMatch(block, /\[\?\]/);
+
+  const view = formatRoomMessagesView({
+    guestName: 'Ali',
+    messages: [{ text: 'hi', isOwn: false }],
+  });
+  assert.match(view, /پیام/);
+  assert.match(view, /Ali/);
+});
+
+test('formatDraftScreen shows ready status', () => {
+  const text = formatDraftScreen({
+    guestName: 'کارفرما',
+    draftText: 'سلام، آماده‌ام کمک کنم.',
+  });
+  assert.match(text, /پیش‌نویس پاسخ/);
+  assert.match(text, /آماده بررسی/);
+  assert.match(text, /سلام/);
 });
 
 test('formatRoomsList empty, pagination, and keyboard', () => {
@@ -90,7 +158,7 @@ test('formatRoomsList empty, pagination, and keyboard', () => {
   const data = page1.keyboard.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(data.some((d) => d.startsWith('room:open:')));
   assert.ok(data.some((d) => d.startsWith('room:ai:')));
-  assert.ok(data.some((d) => d.startsWith('room:note:')));
+  assert.ok(data.some((d) => d.startsWith('room:dft:')));
   assert.ok(data.includes('page:chats:2'));
   assert.ok(data.includes('nav:home'));
   assert.doesNotMatch(page1.text, /#1\b/);

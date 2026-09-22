@@ -3,28 +3,66 @@ import assert from 'node:assert/strict';
 import { buildDraftReply } from '../../src/agent/draft-api.js';
 import { mergeNoteIntoDraft, createRoomState } from '../../src/agent/room-state.js';
 import { adaptDraftWithNote } from '../../src/agent/analyze-llm.js';
+import { cleanHumanReply } from '../../src/agent/reply-clean.js';
 import { openDb } from '../../src/memory/db.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-test('buildDraftReply is deterministic template without LLM', () => {
-  const a = buildDraftReply({
+test('buildDraftReply is deterministic human template without LLM', () => {
+  const ctx = {
     roomId: 1,
     guestName: 'علی',
     project: { title: 'ربات تلگرام', minBudget: 100, maxBudget: 200, jobDuration: 7, isFulltime: false },
     messages: [{ text: 'نیاز به ربات دارم', isOwn: false }],
-  });
-  const b = buildDraftReply({
-    roomId: 1,
-    guestName: 'علی',
-    project: { title: 'ربات تلگرام', minBudget: 100, maxBudget: 200, jobDuration: 7, isFulltime: false },
-    messages: [{ text: 'نیاز به ربات دارم', isOwn: false }],
-  });
+  };
+  const a = buildDraftReply(ctx);
+  const b = buildDraftReply(ctx);
   assert.equal(a.text, b.text);
   assert.equal(a.source, 'template');
   assert.match(a.text, /علی/);
-  assert.match(a.text, /ربات تلگرام/);
+  // Must sound human — no title dump / robotic wrappers
+  assert.doesNotMatch(a.text, /پروژه\s*[«"']/);
+  assert.doesNotMatch(a.text, /با توجه به درخواستتان/);
+  assert.doesNotMatch(a.text, /آماده‌?ام همکاری کنم/);
+  assert.doesNotMatch(a.text, /می‌باشد/);
+  assert.match(a.text, /سلام/);
+  assert.match(a.text, /متوجه|خواندم|مرور/);
+});
+
+test('buildDraftReply does not auto-price unless asked', () => {
+  const silent = buildDraftReply({
+    guestName: 'ب',
+    proposal: { price: 5_000_000, days: 3 },
+    messages: [{ text: 'سلام پروژه را ببینید', isOwn: false }],
+  });
+  assert.doesNotMatch(silent.text, /۵|5|تومان|هزینه/);
+
+  const asked = buildDraftReply({
+    guestName: 'ب',
+    includePrice: true,
+    proposal: { price: 5_000_000 },
+    messages: [{ text: 'قیمت چقدر است؟', isOwn: false }],
+  });
+  assert.match(asked.text, /تومان|هزینه|پیشنهاد/);
+});
+
+test('cleanHumanReply strips robotic wrappers and tech leaks', () => {
+  const raw = [
+    'سلام.',
+    'پروژه «ساخت سایت» را دیدم.',
+    'با توجه به درخواستتان («لطفاً فوری») آماده‌ام همکاری کنم.',
+    'راهکار ما می‌باشد.',
+    'blocked_by_missing_api roomId=99',
+    'Bearer SECRETTOKEN',
+  ].join('\n');
+  const out = cleanHumanReply(raw);
+  assert.doesNotMatch(out, /پروژه «/);
+  assert.doesNotMatch(out, /با توجه به درخواستتان/);
+  assert.doesNotMatch(out, /آماده‌ام همکاری/);
+  assert.doesNotMatch(out, /می‌باشد/);
+  assert.doesNotMatch(out, /blocked_by_missing_api|roomId|SECRETTOKEN/);
+  assert.match(out, /سلام/);
 });
 
 test('mergeNoteIntoDraft appends owner note', () => {
