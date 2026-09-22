@@ -897,7 +897,7 @@ async function replyMode(ctx, { edit = false } = {}) {
     const job = queue.create({
       goal: 'rooms.scan',
       requestedBy: `telegram:${ctx.from?.id}`,
-      payload: { page },
+      payload: { page, manual: true, forceNotify: true },
     });
     const sent = await editOrReply(
       ctx,
