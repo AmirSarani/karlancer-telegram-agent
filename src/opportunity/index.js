@@ -20,3 +20,6 @@ export {
   createOpportunityScanner,
   formatOpportunityNotify,
 } from './scanner.js';
+
+export { buildSmartBid } from './smart-bid.js';
+export { createFeedbackStore, defaultFeedbackState } from './feedback.js';

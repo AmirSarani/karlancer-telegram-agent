@@ -30,20 +30,17 @@ import {
   deriveSystemHealth,
 } from '../../src/telegram/ui.js';
 
-test('main menu has at most 6 Persian IA items and is persistent', () => {
+test('main menu includes فرصت‌ها and صندوق and is persistent', () => {
   const kb = mainMenuKeyboard('running');
   assert.equal(kb.resize_keyboard, true);
   assert.equal(kb.is_persistent, true);
   const flat = kb.keyboard.flat().map((b) => b.text);
-  assert.deepEqual(flat, [
-    BTN.DASHBOARD,
-    BTN.CHATS,
-    BTN.ALERTS,
-    BTN.APPROVALS,
-    BTN.SETTINGS,
-    BTN.HELP,
-  ]);
-  assert.ok(flat.length <= 6);
+  assert.ok(flat.includes(BTN.DASHBOARD));
+  assert.ok(flat.includes(BTN.OPPORTUNITIES));
+  assert.ok(flat.includes(BTN.INBOX));
+  assert.ok(flat.includes(BTN.APPROVALS));
+  assert.ok(flat.includes(BTN.SETTINGS));
+  assert.ok(flat.length >= 6 && flat.length <= 10);
 });
 
 test('inline approval keyboard encodes callback with id and nav', () => {

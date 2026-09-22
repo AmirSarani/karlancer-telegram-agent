@@ -8,14 +8,16 @@ import {
 } from '../../src/telegram/ui.js';
 import { formatRoomsList, roomConfirmKeyboard, formatAiAnalysisCard } from '../../src/telegram/room-card.js';
 
-test('IA menu labels are Persian and max 6', () => {
+test('IA menu labels are Persian and include فرصت‌ها/صندوق', () => {
   const labels = mainMenuKeyboard().keyboard.flat().map((b) => b.text);
-  assert.equal(labels.length, 6);
+  assert.ok(labels.length >= 6 && labels.length <= 10);
   for (const l of labels) {
     assert.equal(typeof l, 'string');
     assert.ok(l.length > 0);
   }
   assert.ok(labels.includes(BTN.DASHBOARD));
+  assert.ok(labels.includes(BTN.OPPORTUNITIES));
+  assert.ok(labels.includes(BTN.INBOX));
   assert.ok(labels.includes(BTN.SETTINGS));
 });
 

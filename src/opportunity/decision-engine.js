@@ -16,7 +16,7 @@ import { ruleActionToDecision } from './rules-engine.js';
  * @param {string[]} input.reasons
  * @param {object[]} input.matchedRules — from matchRules().matched
  * @param {object} input.settings — agent settings (mode, toggles, limits, emergencyStop)
- * @param {object} [input.gate] — PermissionGate instance (optional; used for AUTO_EXECUTE preview)
+ * @param {object} [input.gate] — PermissionGate instance (optional; used for AUTO_EXECUTE)
  * @param {{ messages?: number, bids?: number }} [input.todayCounts]
  * @param {boolean} [input.alreadyActed] — duplicate bid / prior ACTION_CREATED|SUBMITTED
  * @param {boolean} [input.cooldownActive]
@@ -25,7 +25,7 @@ import { ruleActionToDecision } from './rules-engine.js';
  *   reasons: string[],
  *   matchedRules: object[],
  *   gateVerdict: object|null,
- *   mockAutoExecute: boolean,
+ *   mockAutoExecute: boolean, // true only when degraded to preview-only
  * }}
  */
 export function decideOpportunity(input) {
@@ -265,17 +265,17 @@ export function decideOpportunity(input) {
         };
       }
 
-      // gate auto_allow — still MOCK: do not live-submit; route as REQUEST_APPROVAL with mock flag
-      // (mutation-request may still require approval depending on preview N)
+      // Limited real AUTO_EXECUTE: PermissionGate auto_allow + toggles + limits.
+      // Scanner still applies approvalPreviewFirstN (forceRequireApproval for first N).
       return {
         decision: 'AUTO_EXECUTE',
         reasons: [
           ...reasons,
-          `قانون «${primary.name}» + گیت auto_allow — مسیر mock از PermissionGate/mutation-request`,
+          `قانون «${primary.name}» + گیت auto_allow — اجرای خودکار محدود (سقف روزانه + پیش‌نمایش N اول)`,
         ],
         matchedRules,
         gateVerdict,
-        mockAutoExecute: true,
+        mockAutoExecute: false,
       };
     }
   }

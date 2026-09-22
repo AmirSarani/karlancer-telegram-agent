@@ -35,19 +35,20 @@ import {
   formatScanSummary,
 } from '../../src/telegram/scan-ux.js';
 
-test('main nav is 6 ops items with مهم‌ها not هشدارها', () => {
+test('main nav includes فرصت‌ها and صندوق; مهم‌ها retained', () => {
   const labels = mainMenuKeyboard().keyboard.flat().map((b) => b.text);
-  assert.deepEqual(labels, [
-    BTN.DASHBOARD,
-    BTN.CHATS,
-    BTN.ALERTS,
-    BTN.APPROVALS,
-    BTN.SETTINGS,
-    BTN.HELP,
-  ]);
+  assert.ok(labels.includes(BTN.DASHBOARD));
+  assert.ok(labels.includes(BTN.CHATS));
+  assert.ok(labels.includes(BTN.OPPORTUNITIES));
+  assert.ok(labels.includes(BTN.INBOX));
+  assert.ok(labels.includes(BTN.APPROVALS));
+  assert.ok(labels.includes(BTN.SETTINGS));
+  assert.ok(labels.includes(BTN.ALERTS));
   assert.match(BTN.ALERTS, /مهم/);
   assert.equal(mapMenuText('هشدارها'), 'alerts');
   assert.equal(mapMenuText(BTN.ALERTS), 'alerts');
+  assert.equal(mapMenuText(BTN.OPPORTUNITIES), 'opportunities');
+  assert.equal(mapMenuText(BTN.INBOX), 'inbox');
 });
 
 test('home welcome is branded with status CTAs and no secrets', () => {

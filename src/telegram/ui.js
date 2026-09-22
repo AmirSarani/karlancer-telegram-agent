@@ -58,6 +58,8 @@ export {
 export const BTN = Object.freeze({
   DASHBOARD: '📊 داشبورد',
   CHATS: '💬 گفتگوها',
+  OPPORTUNITIES: '🔥 فرصت‌ها',
+  INBOX: '📥 صندوق',
   ALERTS: '🔥 مهم‌ها',
   APPROVALS: '✅ تأییدها',
   SETTINGS: '⚙️ تنظیمات',
@@ -84,6 +86,8 @@ export const BOT_COMMANDS = [
   { command: 'unread', description: 'مهم‌ها و خوانده‌نشده' },
   { command: 'approvals', description: 'تأییدهای در انتظار' },
   { command: 'settings', description: 'تنظیمات ایجنت' },
+  { command: 'opportunities', description: 'فرصت‌های پروژه' },
+  { command: 'inbox', description: 'صندوق تصمیم' },
   { command: 'mode', description: 'نمایش/تغییر حالت اجرا' },
   { command: 'automation', description: 'خودکارسازی و محدودیت‌ها' },
   { command: 'show_rules', description: 'قوانین خودکار' },
@@ -107,10 +111,13 @@ export function mainMenuKeyboard(agentState = 'running') {
     .text(BTN.DASHBOARD)
     .text(BTN.CHATS)
     .row()
-    .text(BTN.ALERTS)
-    .text(BTN.APPROVALS)
+    .text(BTN.OPPORTUNITIES)
+    .text(BTN.INBOX)
     .row()
+    .text(BTN.APPROVALS)
     .text(BTN.SETTINGS)
+    .row()
+    .text(BTN.ALERTS)
     .text(BTN.HELP)
     .resized()
     .persistent();
@@ -205,6 +212,9 @@ export function settingsInlineKeyboard(agentState = 'running', exec = {}) {
     .text('📡 اسکن اتاق‌ها', 'set:scan')
     .text('🔥 فرصت‌ها', 'opp:hub')
     .row()
+    .text('👤 پروفایل امتیاز', 'opp:profile')
+    .text('📥 صندوق', 'goto:inbox')
+    .row()
     .text('🔐 تمدید نشست', 'set:relogin')
     .text('🎚 سوئیچ‌ها', 'nav:toggles')
     .row()
@@ -257,6 +267,9 @@ export function homeInlineKeyboard() {
     .text('📊 داشبورد', 'nav:dash')
     .text('💬 گفتگوها', 'goto:chats')
     .row()
+    .text('🔥 فرصت‌ها', 'opp:hub')
+    .text('📥 صندوق', 'goto:inbox')
+    .row()
     .text('🔥 مهم‌ها', 'goto:unread')
     .text('✅ تأییدها', 'goto:approvals')
     .row()
@@ -276,6 +289,8 @@ export function parseCallbackData(data) {
   if (data === 'goto:approvals') return { type: 'goto_approvals' };
   if (data === 'goto:chats') return { type: 'goto_chats' };
   if (data === 'goto:unread') return { type: 'goto_unread' };
+  if (data === 'goto:inbox') return { type: 'goto_inbox' };
+  if (data === 'inbox:refresh') return { type: 'inbox_refresh' };
   if (data === 'nav:home') return { type: 'nav_home' };
   if (data === 'nav:dash') return { type: 'nav_dash' };
   if (data === 'nav:set') return { type: 'nav_settings' };
@@ -786,6 +801,8 @@ export function formatHelp() {
     `• 🏠 خانه — وضعیت کلی و میان‌برها`,
     `• ${BTN.DASHBOARD} — سالم؟ چه چیزی مهم است؟`,
     `• ${BTN.CHATS} — لیست گفتگوها`,
+    `• ${BTN.OPPORTUNITIES} — اسکن و امتیاز فرصت‌های پروژه`,
+    `• ${BTN.INBOX} — صندوق تصمیم (فرصت + تأیید + پیام)`,
     `• ${BTN.ALERTS} — موارد نیازمند توجه`,
     `• ${BTN.APPROVALS} — تأیید یا رد عملیات`,
     `• ${BTN.SETTINGS} — حالت اجرا / قوانین / توقف اضطراری`,
@@ -793,8 +810,8 @@ export function formatHelp() {
     'داخل هر گفتگو: مشاهده · تحلیل · پیش‌نویس · ارسال · قانون',
     'قبل از ارسال، پیش‌نمایش و تأیید نهایی می‌آید.',
     '',
-    'دستورات: /start · /status · /chats · /unread',
-    '/approvals · /settings · /mode · /automation · /show_rules',
+    'دستورات: /start · /status · /chats · /opportunities · /inbox',
+    '/unread · /approvals · /settings · /mode · /automation · /show_rules',
     '/emergency_stop · /scan · /help',
     '',
     'عملیات حساس فقط بعد از تأیید شما اجرا می‌شود.',
@@ -923,6 +940,8 @@ export function mapMenuText(text) {
   const t = (text || '').trim();
   if (t === BTN.DASHBOARD || t === BTN.STATUS || t === BTN.DASHBOARD_LEGACY) return 'dashboard';
   if (t === BTN.CHATS || t === BTN.CHATS_LEGACY) return 'chats';
+  if (t === BTN.OPPORTUNITIES) return 'opportunities';
+  if (t === BTN.INBOX) return 'inbox';
   if (t === BTN.ALERTS || t === BTN.UNREAD || t === BTN.ALERTS_LEGACY) return 'alerts';
   if (t === BTN.APPROVALS || t === BTN.APPROVALS_LEGACY) return 'approvals';
   if (t === BTN.SETTINGS || t === BTN.SETTINGS_LEGACY) return 'settings';

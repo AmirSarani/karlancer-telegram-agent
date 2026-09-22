@@ -417,16 +417,19 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
         return {
           lastScanAt: null,
           lastProjectIds: [],
+          sinceLastId: null,
           cooldownUntil: null,
           intervalMs: 30 * 60_000,
           paused: false,
         };
       }
-      return JSON.parse(row.value);
+      const parsed = JSON.parse(row.value);
+      return { sinceLastId: null, ...parsed };
     } catch {
       return {
         lastScanAt: null,
         lastProjectIds: [],
+        sinceLastId: null,
         cooldownUntil: null,
         intervalMs: 30 * 60_000,
         paused: false,

@@ -117,10 +117,19 @@ export function scoreOpportunity(opportunity, profile = {}) {
     reasons.push(`قدیمی‌تر از ${freshHours} ساعت (+0)`);
   }
 
-  // —— Client (up to weights.client) ——
+  // —— Client (up to weights.client) — ONLY if real API fields exist ——
   const rate = num(opportunity?.client?.rate ?? opportunity?.client?.rateNum);
-  if (rate == null) {
-    reasons.push('امتیاز کارفرما مشخص نیست (+0)');
+  const hasRealClient =
+    rate != null ||
+    (opportunity?.client?.id != null && String(opportunity.client.id).trim() !== '') ||
+    (opportunity?.client?.country != null && String(opportunity.client.country).trim() !== '');
+  if (!hasRealClient) {
+    // Honest omission: do not invent client quality; redistribute weight silently as 0 with reason
+    reasons.push('کیفیت کارفرما در API موجود نیست — این جزء امتیاز حذف شد');
+    breakdown.client = 0;
+  } else if (rate == null) {
+    reasons.push('شناسه کارفرما هست ولی امتیاز عددی نیست — جزء امتیاز کارفرما صفر');
+    breakdown.client = 0;
   } else if (rate >= clientMinRate) {
     const ratio = Math.min(1, (rate - clientMinRate + 1) / (5 - clientMinRate + 1));
     breakdown.client = Math.round(weights.client * Math.max(0.5, ratio));

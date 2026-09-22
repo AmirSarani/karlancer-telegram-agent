@@ -50,16 +50,28 @@ import { createMutationRequester } from './mutation-request.js';
 import {
   formatOpportunityCard,
   opportunityCardKeyboard,
+  smartBidKeyboard,
   opportunitiesListKeyboard,
   opportunityRulesKeyboard,
+  opportunityRuleDetailKeyboard,
+  scoringProfileKeyboard,
+  formatScoringProfile,
   formatOpportunitiesHub,
   formatOpportunityScanResult,
   formatOpportunityRule,
+  formatRuleEditorHelp,
+  parseRuleCreateText,
+  formatDecisionInbox,
+  decisionInboxKeyboard,
   parseOpportunityCallback,
 } from './opportunity-ux.js';
 import { createOpportunityScanner } from '../opportunity/scanner.js';
 import { createOpportunityStore } from '../opportunity/store.js';
 import { isScoringConfigured } from '../opportunity/scoring.js';
+import { buildSmartBid } from '../opportunity/smart-bid.js';
+import { createFeedbackStore } from '../opportunity/feedback.js';
+import { createWizardState } from './wizard-state.js';
+import { checkTokenHealth, formatTokenWarningFa } from '../security/token-health.js';
 
 import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
@@ -173,6 +185,7 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     db != null
       ? createRoomFlows({ db, queue, api, llm, menuOpts, gate, mutations })
       : null;
+  const wizard = db != null ? createWizardState(db) : null;
 
   /** @type {{ chatId: number, messageId: number, jobId?: string } | null} */
   let pendingScanMessage = null;
@@ -436,13 +449,23 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
 
   async function replySettings(ctx, { edit = false } = {}) {
     const exec = gate ? gate.settings.get() : {};
-    const text = formatSettingsCard({
+    let text = formatSettingsCard({
       state: runtime.state,
       karlancerAuth: api?.client ? Boolean(api.client.hasAuth) : null,
       executionMode: exec.mode || 'manual',
       emergencyStop: Boolean(exec.emergencyStop),
       toggles: exec.toggles || {},
     });
+    try {
+      const th = checkTokenHealth({
+        authOk: api?.client ? Boolean(api.client.hasAuth) : null,
+        envFile: hooks.envFile || null,
+      });
+      const warn = formatTokenWarningFa(th);
+      if (warn) text += `\n\n⚠️ ${warn}`;
+    } catch {
+      /* ignore */
+    }
     const reply_markup = settingsInlineKeyboard(runtime.state, {
       mode: exec.mode,
       emergencyStop: Boolean(exec.emergencyStop),
@@ -872,6 +895,7 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     if (roomFlows) roomFlows.roomState.clearAwaitingNote(ctx.from?.id);
+    if (wizard) wizard.clear(ctx.from?.id);
     if (getReloginState(ctx.chat?.id)) {
       clearReloginState(ctx.chat.id);
       await ctx.reply(RELOGIN_MSG.CANCELLED, menuOpts());
@@ -880,11 +904,25 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     await ctx.reply('لغو شد.', menuOpts());
   });
 
+  bot.command('opportunities', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await replyOpportunitiesHub(ctx);
+  });
+
+  bot.command('inbox', async (ctx) => {
+    if (await denyIfNotOwner(ctx)) return;
+    touch();
+    await replyDecisionInbox(ctx);
+  });
+
   // —— Reply keyboard text map ——
   bot.on('message:text', async (ctx, next) => {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     if (roomFlows && (await roomFlows.maybeHandleAwaitingNote(ctx))) return;
+
+    if (wizard && (await maybeHandleWizardText(ctx))) return;
 
     if (getReloginState(ctx.chat?.id)) {
       await handleReloginText({
@@ -913,6 +951,8 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     if (!action) return next();
     if (action === 'dashboard' || action === 'status') return replyStatus(ctx);
     if (action === 'approvals') return replyApprovals(ctx);
+    if (action === 'opportunities') return replyOpportunitiesHub(ctx);
+    if (action === 'inbox') return replyDecisionInbox(ctx);
     if (action === 'chats') {
       if (!roomFlows) return ctx.reply('گفتگوها در دسترس نیست.', menuOpts());
       return roomFlows.replyRoomsList(ctx, { unreadOnly: false });
@@ -949,27 +989,73 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     const list = store.list({ limit: 20 });
     const scan = store.getScanState();
     const profile = store.getScoringProfile();
-    const text = formatOpportunitiesHub({
+    const textOut = formatOpportunitiesHub({
       count: list.length,
       lastScanAt: scan.lastScanAt,
       scoringAvailable: isScoringConfigured(profile),
     });
     await editOrReply(
       ctx,
-      text,
+      textOut,
       { reply_markup: opportunitiesListKeyboard(list) },
       { edit }
     );
   }
 
+  async function replyDecisionInbox(ctx, { edit = false } = {}) {
+    if (!db) {
+      await ctx.reply('صندوق در دسترس نیست.', menuOpts());
+      return;
+    }
+    const store = createOpportunityStore(db);
+    const opps = store.list({ minScore: 40, limit: 10 }).filter((o) => o.state !== 'IGNORED');
+    const approvals = queue ? queue.pendingApprovals() : [];
+    const approvalLabels = approvals.map((a) => ({
+      approval_id: a.approval_id,
+      action: a.action,
+      label: `${a.action || 'عملیات'} · ${String(a.approval_id || '').slice(0, 8)}`,
+    }));
+    let messages = [];
+    try {
+      const ids = roomFlows?.roomState?.listPendingRoomIds?.() || [];
+      messages = ids.slice(0, 5).map((id) => ({
+        roomId: id,
+        label: `گفتگو ${id}`,
+      }));
+    } catch {
+      messages = [];
+    }
+    const textOut = formatDecisionInbox({
+      opportunities: opps,
+      approvals: approvalLabels,
+      messages,
+    });
+    await editOrReply(ctx, textOut, { reply_markup: decisionInboxKeyboard() }, { edit });
+  }
+
+  async function replyScoringProfile(ctx, { edit = false } = {}) {
+    if (!db) {
+      await ctx.reply('پروفایل در دسترس نیست.', menuOpts());
+      return;
+    }
+    const store = createOpportunityStore(db);
+    const profile = store.getScoringProfile();
+    await editOrReply(
+      ctx,
+      formatScoringProfile(profile),
+      { reply_markup: scoringProfileKeyboard(profile) },
+      { edit }
+    );
+  }
+
   async function doOpportunityScan(ctx, { edit = false } = {}) {
-    const scanner = getOppScanner(async (text, meta) => {
+    const scanner = getOppScanner(async (textMsg, meta) => {
       try {
         const opp = meta?.opportunity;
-        await ctx.api.sendMessage(ctx.chat.id, text, {
+        await ctx.api.sendMessage(ctx.chat.id, textMsg, {
           reply_markup: opp?.id ? opportunityCardKeyboard(opp.id) : undefined,
         });
-      } catch (e) {
+      } catch {
         /* ignore notify errors */
       }
     });
@@ -996,7 +1082,7 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     const rules = store.listRules();
     const lines = ['📜 قوانین فرصت', '————————', ''];
     if (!rules.length) {
-      lines.push('هنوز قانونی نیست. «نمونه قانون» را بزنید.');
+      lines.push('هنوز قانونی نیست. «قانون جدید» یا «نمونه» را بزنید.');
     } else {
       for (const r of rules.slice(0, 15)) {
         lines.push(`${r.enabled ? '✅' : '⛔'} ${r.name} → ${r.action}`);
@@ -1010,6 +1096,186 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
     );
   }
 
+  async function showSmartBid(ctx, projectId, { edit = true } = {}) {
+    const store = createOpportunityStore(db);
+    const row = store.get(projectId);
+    if (!row) {
+      await editOrReply(ctx, 'فرصت پیدا نشد.', { reply_markup: opportunitiesListKeyboard([]) }, { edit });
+      return;
+    }
+    const profile = store.getScoringProfile();
+    const opp = row.opportunity || row;
+    const smart = buildSmartBid(opp, profile, {
+      score: row.score,
+      reasons: row.scoreReasons || [],
+    });
+    // stash last smart bid for edit/submit
+    if (wizard) {
+      wizard.set(ctx.from?.id, {
+        kind: 'smart_bid_ready',
+        projectId: String(projectId),
+        text: smart.text,
+        price: smart.price,
+        days: smart.days,
+      });
+    }
+    await editOrReply(ctx, smart.previewFa, { reply_markup: smartBidKeyboard(projectId) }, { edit });
+  }
+
+  async function requestSmartBidApproval(ctx, projectId) {
+    if (!mutations) {
+      await ctx.reply('صف جهش در دسترس نیست.', menuOpts());
+      return;
+    }
+    const store = createOpportunityStore(db);
+    const row = store.get(projectId);
+    if (!row) {
+      await ctx.reply('فرصت پیدا نشد.', menuOpts());
+      return;
+    }
+    const profile = store.getScoringProfile();
+    const wz = wizard?.get(ctx.from?.id);
+    const smart =
+      wz?.kind === 'smart_bid_ready' && wz.projectId === String(projectId)
+        ? { text: wz.text, price: wz.price, days: wz.days }
+        : buildSmartBid(row.opportunity || row, profile, { score: row.score });
+    const result = mutations.request({
+      action: 'bids.submit',
+      payload: {
+        projectId,
+        proposalText: smart.text,
+        price: smart.price ?? row.budgetMin ?? 1_000_000,
+        days: smart.days ?? 7,
+        smartBid: true,
+        opportunityScore: row.score,
+      },
+      gateCtx: {
+        source: 'telegram',
+        projectId,
+        matchScore: row.score,
+        confidence: row.score,
+        budget: row.budgetMax ?? row.budgetMin,
+        category: row.category,
+        hasExistingBid: false,
+        riskHint: 'high',
+      },
+      requestedBy: `telegram:${ctx.from?.id}`,
+      targetRef: String(projectId),
+      forceRequireApproval: true,
+      idempotencyKey: `smart-bid:${projectId}:${Date.now()}`,
+    });
+    store.setState(projectId, 'ACTION_CREATED');
+    if (wizard) wizard.clear(ctx.from?.id);
+    if (result.denied) {
+      await editOrReply(
+        ctx,
+        `⛔ گیت رد کرد: ${result.verdict?.reasonFa || result.verdict?.reason || 'deny'}`,
+        { reply_markup: opportunityCardKeyboard(projectId) },
+        { edit: true }
+      );
+      return;
+    }
+    await editOrReply(
+      ctx,
+      [
+        '✅ پیشنهاد هوشمند در صف تأیید قرار گرفت.',
+        'از «✅ تأییدها» یا صندوق تصمیم می‌توانید اجرا/رد کنید.',
+        'ارسال زنده فقط پس از تأیید و VerifiedMutationContract.',
+      ].join('\n'),
+      { reply_markup: opportunityCardKeyboard(projectId) },
+      { edit: true }
+    );
+  }
+
+  async function maybeHandleWizardText(ctx) {
+    if (!wizard || !db) return false;
+    const st = wizard.get(ctx.from?.id);
+    if (!st?.kind) return false;
+    const textIn = (ctx.message?.text || '').trim();
+    if (!textIn) return false;
+    if (textIn === '/cancel') {
+      wizard.clear(ctx.from?.id);
+      await ctx.reply('لغو شد.', menuOpts());
+      return true;
+    }
+    const store = createOpportunityStore(db);
+
+    if (st.kind === 'profile_skills') {
+      const skills = textIn.split(/[,،\n]/).map((s) => s.trim()).filter(Boolean);
+      const cur = store.getScoringProfile();
+      store.setScoringProfile({ ...cur, preferredSkills: skills });
+      getOppScanner()?.syncScoringAvailable?.();
+      wizard.clear(ctx.from?.id);
+      await ctx.reply(`✅ مهارت‌ها ذخیره شد (${skills.length}).`, menuOpts());
+      await replyScoringProfile(ctx);
+      return true;
+    }
+    if (st.kind === 'profile_budget') {
+      const nums = textIn.replace(/,/g, '').match(/\d+/g) || [];
+      const cur = store.getScoringProfile();
+      const budgetMin = nums[0] != null ? Number(nums[0]) : null;
+      const budgetMax = nums[1] != null ? Number(nums[1]) : null;
+      store.setScoringProfile({ ...cur, budgetMin, budgetMax });
+      getOppScanner()?.syncScoringAvailable?.();
+      wizard.clear(ctx.from?.id);
+      await ctx.reply('✅ بودجه ذخیره شد.', menuOpts());
+      await replyScoringProfile(ctx);
+      return true;
+    }
+    if (st.kind === 'profile_cats') {
+      const cats = textIn.split(/[,،\n]/).map((s) => s.trim()).filter(Boolean);
+      const cur = store.getScoringProfile();
+      store.setScoringProfile({ ...cur, preferredCategories: cats });
+      getOppScanner()?.syncScoringAvailable?.();
+      wizard.clear(ctx.from?.id);
+      await ctx.reply(`✅ دسته‌ها ذخیره شد (${cats.length}).`, menuOpts());
+      await replyScoringProfile(ctx);
+      return true;
+    }
+    if (st.kind === 'rule_create') {
+      const parsed = parseRuleCreateText(textIn);
+      if (!parsed.ok) {
+        await ctx.reply('قالب نادرست است. دوباره بفرستید یا /cancel', menuOpts());
+        return true;
+      }
+      store.createRule(parsed.rule);
+      wizard.clear(ctx.from?.id);
+      await ctx.reply(`✅ قانون «${parsed.rule.name}» ساخته شد.`, menuOpts());
+      await replyOpportunityRules(ctx);
+      return true;
+    }
+    if (st.kind === 'rule_edit' && st.ruleId) {
+      const parsed = parseRuleCreateText(textIn);
+      if (!parsed.ok) {
+        await ctx.reply('قالب نادرست است. دوباره بفرستید یا /cancel', menuOpts());
+        return true;
+      }
+      store.updateRule(st.ruleId, {
+        name: parsed.rule.name,
+        conditions: parsed.rule.conditions,
+        action: parsed.rule.action,
+      });
+      wizard.clear(ctx.from?.id);
+      await ctx.reply('✅ قانون به‌روز شد.', menuOpts());
+      await replyOpportunityRules(ctx);
+      return true;
+    }
+    if (st.kind === 'smart_bid_edit' && st.projectId) {
+      wizard.set(ctx.from?.id, {
+        kind: 'smart_bid_ready',
+        projectId: st.projectId,
+        text: textIn.slice(0, 3500),
+        price: st.price,
+        days: st.days,
+      });
+      await ctx.reply('✅ متن پیشنهاد به‌روز شد. برای ارسال به صف تأیید دکمه را بزنید.', {
+        reply_markup: smartBidKeyboard(st.projectId),
+        ...menuOpts(),
+      });
+      return true;
+    }
+    return false;
+  }
 
   // —— Inline callbacks ——
   bot.on('callback_query:data', async (ctx) => {
@@ -1057,6 +1323,12 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       return;
     }
 
+    if (parsed.type === 'goto_inbox' || parsed.type === 'inbox_refresh') {
+      await ctx.answerCallbackQuery();
+      await replyDecisionInbox(ctx, { edit: true });
+      return;
+    }
+
     const oppCb = parseOpportunityCallback(ctx.callbackQuery.data);
     if (oppCb) {
       if (oppCb.type === 'opp_scan') {
@@ -1074,6 +1346,47 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
         await replyOpportunityRules(ctx, { edit: true });
         return;
       }
+      if (oppCb.type === 'opp_profile') {
+        await ctx.answerCallbackQuery();
+        await replyScoringProfile(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_prof_edit' && wizard) {
+        await ctx.answerCallbackQuery();
+        const field = oppCb.field;
+        if (field === 'skills') {
+          wizard.set(ctx.from?.id, { kind: 'profile_skills' });
+          await editOrReply(
+            ctx,
+            '🛠 مهارت‌های ترجیحی را با ویرگول بفرستید.\nمثال: وردپرس، react، seo\nلغو: /cancel',
+            {},
+            { edit: true }
+          );
+        } else if (field === 'budget') {
+          wizard.set(ctx.from?.id, { kind: 'profile_budget' });
+          await editOrReply(
+            ctx,
+            '💰 حداقل و حداکثر بودجه را بفرستید (تومان).\nمثال: 5000000 20000000\nلغو: /cancel',
+            {},
+            { edit: true }
+          );
+        } else if (field === 'cats') {
+          wizard.set(ctx.from?.id, { kind: 'profile_cats' });
+          await editOrReply(
+            ctx,
+            '📂 شناسه یا نام دسته‌ها را با ویرگول بفرستید.\nمثال: 6، 12\nلغو: /cancel',
+            {},
+            { edit: true }
+          );
+        }
+        return;
+      }
+      if (oppCb.type === 'opp_rule_new' && wizard) {
+        await ctx.answerCallbackQuery();
+        wizard.set(ctx.from?.id, { kind: 'rule_create' });
+        await editOrReply(ctx, formatRuleEditorHelp(), {}, { edit: true });
+        return;
+      }
       if (oppCb.type === 'opp_rule_sample') {
         await ctx.answerCallbackQuery({ text: 'نمونه قانون' });
         if (db) {
@@ -1089,7 +1402,6 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
               ],
             });
           }
-          // enable scoring profile lightly so scoringAvailable can turn on
           const cur = store.getScoringProfile();
           if (!(cur.preferredSkills || []).length) {
             store.setScoringProfile({
@@ -1098,10 +1410,21 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
               budgetMin: 1_000_000,
             });
           }
-          const scanner = getOppScanner();
-          scanner?.syncScoringAvailable?.();
+          getOppScanner()?.syncScoringAvailable?.();
         }
         await replyOpportunityRules(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_rule_view' && db) {
+        await ctx.answerCallbackQuery();
+        const store = createOpportunityStore(db);
+        const rule = store.getRule(oppCb.ruleId);
+        await editOrReply(
+          ctx,
+          formatOpportunityRule(rule),
+          { reply_markup: opportunityRuleDetailKeyboard(oppCb.ruleId) },
+          { edit: true }
+        );
         return;
       }
       if (oppCb.type === 'opp_rule_toggle' && db) {
@@ -1109,6 +1432,18 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
         const store = createOpportunityStore(db);
         const rule = store.getRule(oppCb.ruleId);
         if (rule) store.setRuleEnabled(oppCb.ruleId, !rule.enabled);
+        await replyOpportunityRules(ctx, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_rule_edit' && db && wizard) {
+        await ctx.answerCallbackQuery();
+        wizard.set(ctx.from?.id, { kind: 'rule_edit', ruleId: oppCb.ruleId });
+        await editOrReply(ctx, formatRuleEditorHelp(), {}, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_rule_delete' && db) {
+        await ctx.answerCallbackQuery({ text: 'حذف شد' });
+        createOpportunityStore(db).deleteRule(oppCb.ruleId);
         await replyOpportunityRules(ctx, { edit: true });
         return;
       }
@@ -1136,17 +1471,53 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       }
       if (oppCb.type === 'opp_ignore' && db) {
         await ctx.answerCallbackQuery({ text: 'نادیده گرفته شد' });
-        createOpportunityStore(db).setState(oppCb.projectId, 'IGNORED');
+        const store = createOpportunityStore(db);
+        const row = store.get(oppCb.projectId);
+        store.setState(oppCb.projectId, 'IGNORED');
+        if (row) {
+          const fb = createFeedbackStore(db);
+          fb.record('ignore', row.opportunity || row);
+          for (const r of row.matchedRules || []) {
+            if (r.ruleId) fb.softPenaltyRule(r.ruleId, -1);
+          }
+        }
         await replyOpportunitiesHub(ctx, { edit: true });
         return;
       }
-      if (oppCb.type === 'opp_draft' && db) {
-        await ctx.answerCallbackQuery({ text: 'پیش‌نویس' });
-        createOpportunityStore(db).setState(oppCb.projectId, 'ACTION_CREATED');
+      if (oppCb.type === 'opp_reject' && db) {
+        await ctx.answerCallbackQuery({ text: 'رد با بازخورد' });
+        const store = createOpportunityStore(db);
+        const row = store.get(oppCb.projectId);
+        store.setState(oppCb.projectId, 'IGNORED');
+        if (row) {
+          createFeedbackStore(db).record('reject', row.opportunity || row);
+        }
+        await replyOpportunitiesHub(ctx, { edit: true });
+        return;
+      }
+      if ((oppCb.type === 'opp_draft' || oppCb.type === 'opp_smart') && db) {
+        await ctx.answerCallbackQuery({ text: 'پیشنهاد هوشمند…' });
+        await showSmartBid(ctx, oppCb.projectId, { edit: true });
+        return;
+      }
+      if (oppCb.type === 'opp_bidreq' && db) {
+        await ctx.answerCallbackQuery({ text: 'صف تأیید…' });
+        await requestSmartBidApproval(ctx, oppCb.projectId);
+        return;
+      }
+      if (oppCb.type === 'opp_bidedit' && db && wizard) {
+        await ctx.answerCallbackQuery();
+        const prev = wizard.get(ctx.from?.id) || {};
+        wizard.set(ctx.from?.id, {
+          kind: 'smart_bid_edit',
+          projectId: oppCb.projectId,
+          price: prev.price,
+          days: prev.days,
+        });
         await editOrReply(
           ctx,
-          '📝 پیش‌نویس علامت‌گذاری شد. ارسال زنده فقط از مسیر تأیید/PermissionGate.',
-          { reply_markup: opportunityCardKeyboard(oppCb.projectId) },
+          '✏️ متن پیشنهاد را بفرستید (فارسی انسانی).\nلغو: /cancel',
+          {},
           { edit: true }
         );
         return;
