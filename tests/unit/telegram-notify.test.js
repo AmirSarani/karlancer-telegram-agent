@@ -40,11 +40,11 @@ test('formatScanSummary Persian mini-dashboard with priority rooms', () => {
       },
     ],
   });
-  assert.match(text, /نتیجه اسکن|خلاصه اسکن/);
+  assert.match(text, /اسکن کارلنسر|نتیجه اسکن|خلاصه اسکن/);
   assert.doesNotMatch(text, /1\/102/);
   assert.doesNotMatch(text, /7241431/);
   assert.match(text, /Ardeshir\.A/);
-  assert.match(text, /خوانده/);
+  assert.match(text, /پیام جدید|خوانده/);
   assert.doesNotMatch(text, /Bearer /);
 });
 

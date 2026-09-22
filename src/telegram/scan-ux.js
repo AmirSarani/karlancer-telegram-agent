@@ -98,8 +98,8 @@ export function priorityReasonLabel(room = {}) {
   }
   if (Number(room.unread) > 0) return 'پیام جدید';
   if (room.keywordMatched || room.matched) return 'تطابق کلیدواژه';
-  if (room.related || room.isRelated) return 'مرتبط';
-  return 'برای بررسی انتخاب شده';
+  if (room.related || room.isRelated) return 'مرتبط با کار شما';
+  return 'در فهرست اولویت‌ها';
 }
 
 /**
@@ -164,11 +164,36 @@ function guestName(room) {
   ).slice(0, 40);
 }
 
+function cleanPreviewText(raw) {
+  let t = String(raw || '')
+    .replace(/^[«»"'\s]+|[«»"'\s]+$/g, '')
+    .replace(/[«»]/g, '"')
+    .trim();
+  return t;
+}
+
+function looksLikeFilename(t) {
+  return /^[\w.\-\u0600-\u06FF]+\.(png|jpe?g|gif|webp|pdf|zip|rar|docx?|xlsx?|txt)$/i.test(t);
+}
+
 function roomPreview(room) {
-  return truncatePersianText(room.last_message || room.lastMessage || '', {
+  const truncated = truncatePersianText(room.last_message || room.lastMessage || '', {
     max: PREVIEW_MAX,
     lines: PREVIEW_LINES,
   });
+  const cleaned = cleanPreviewText(truncated);
+  if (!cleaned) return '';
+  if (looksLikeFilename(cleaned.replace(/…$/, ''))) {
+    return `📎 ${cleaned}`;
+  }
+  return cleaned;
+}
+
+
+function formatPreviewLine(preview) {
+  if (!preview) return null;
+  if (preview.startsWith('📎 ')) return `   ${preview}`;
+  return `   💬 ${preview}`;
 }
 
 function roomIdOf(room) {
@@ -176,7 +201,7 @@ function roomIdOf(room) {
 }
 
 /**
- * Main scan mini-dashboard (≤ ~8–12 lines). Hides page X/Y and Room IDs.
+ * Main scan mini-dashboard card. Hides page X/Y, Room IDs, and technical keyword tally.
  * @param {object} [s]
  */
 export function formatScanSummary(s = {}) {
@@ -188,50 +213,64 @@ export function formatScanSummary(s = {}) {
   const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms : [];
   const unread = Number(s.unreadOnPage) || 0;
   const scanned = s.pageCount != null ? Number(s.pageCount) : rooms.length;
-  const matched = Number(s.matchedCount) || 0;
-  const attention =
-    rooms.filter((r) => Number(r.unread) > 0).length ||
-    (unread > 0 ? unread : rooms.length);
   const softFails = Number(s.softFailCount ?? s.errorsCount ?? 0) || 0;
+  const needsReview = rooms.length;
 
-  const lines = ['📡 نتیجه اسکن', '————————', ''];
+  const lines = ['📡 اسکن کارلنسر'];
 
   if (state === SCAN_STATES.success_empty) {
+    lines.push('✅ کامل شد', '');
     lines.push('✅ همه‌چیز آرام است');
-    lines.push('گفتگوی نیازمند توجه‌ای پیدا نشد.');
-    lines.push(`📂 بررسی‌شده: ${toFaNum(scanned)} گفتگو`);
+    lines.push('گفتگوی نیازمند بررسی پیدا نشد.');
+    if (scanned > 0) lines.push(`📂 بررسی‌شده: ${toFaNum(scanned)} گفتگو`);
     if (s.scannedAt) lines.push(`⏱ ${formatRelativeTime(s.scannedAt)}`);
     lines.push('', 'می‌توانید بعداً دوباره اسکن کنید.');
     return lines.join('\n');
   }
 
-  if (rooms.length > 0 || attention > 0) {
-    lines.push(`🔴 نیاز به توجه: ${toFaNum(Math.max(attention, rooms.length))} گفتگو`);
-  }
-  lines.push(`🔔 خوانده‌نشده: ${toFaNum(unread)}`);
-  lines.push(`📂 بررسی‌شده: ${toFaNum(scanned)} گفتگو`);
-  if (matched > 0) lines.push(`🔑 تطابق کلیدواژه: ${toFaNum(matched)}`);
-  if (s.scannedAt) lines.push(`⏱ ${formatRelativeTime(s.scannedAt)}`);
-
   if (state === SCAN_STATES.partial_success || softFails > 0) {
-    lines.push('', '⚠️ برخی گفتگوها کامل بررسی نشدند.');
+    lines.push('⚠️ ناقص — بخشی از گفتگوها بررسی شد');
+  } else {
+    lines.push('✅ کامل شد');
+  }
+  lines.push('');
+
+  // Mini-dashboard metrics (honest counts; keyword match folded into reasons)
+  if (needsReview > 0) {
+    lines.push(`🎯 نیازمند بررسی: ${toFaNum(needsReview)}`);
+  } else if (unread > 0) {
+    lines.push(`🎯 نیازمند بررسی: ${toFaNum(unread)}`);
+  } else {
+    lines.push('🎯 نیازمند بررسی: نیست');
+  }
+  lines.push(`📂 در این صفحه: ${toFaNum(scanned)}`);
+  if (unread > 0) {
+    lines.push(`🔔 پیام جدید: ${toFaNum(unread)}`);
+  } else {
+    lines.push('🔔 پیام جدید: ندارید');
   }
 
-  // Keep summary ≤ ~12 lines: reason on same line, max 2 items with preview
-  const showMax = Math.min(2, SUMMARY_PRIORITY_MAX);
+  const showMax = SUMMARY_PRIORITY_MAX;
   const show = rooms.slice(0, showMax);
   if (show.length) {
-    lines.push('', '🔝 موارد مهم:');
+    lines.push('', '🔥 اولویت‌ها');
     for (let i = 0; i < show.length; i++) {
       const r = show[i];
-      const badge = priorityBadge(r);
       const preview = roomPreview(r);
-      lines.push(`${toFaNum(i + 1)}. ${badge.line} · ${guestName(r)} — ${priorityReasonLabel(r)}`);
-      if (preview) lines.push(`   «${preview}»`);
+      const reason = priorityReasonLabel(r);
+      lines.push(`${toFaNum(i + 1)}) ${guestName(r)}`);
+      const previewLine = formatPreviewLine(preview);
+      if (previewLine) lines.push(previewLine);
+      lines.push(`   ℹ️ ${reason}`);
     }
     if (rooms.length > showMax) {
-      lines.push(`… و ${toFaNum(rooms.length - showMax)} مورد دیگر`);
+      const more = rooms.length - showMax;
+      lines.push(`… و ${toFaNum(more)} مورد دیگر ← دکمه «مشاهده همه»`);
     }
+  }
+
+  if (s.scannedAt) {
+    lines.push('', `⏱ ${formatRelativeTime(s.scannedAt)}`);
   }
 
   return lines.join('\n');
@@ -288,8 +327,9 @@ export function formatScanPriorityList(s = {}, { page = 1 } = {}) {
     const badge = priorityBadge(r);
     const preview = roomPreview(r);
     lines.push(`${toFaNum(start + i + 1)}. ${badge.line} · ${guestName(r)}`);
-    if (preview) lines.push(`   «${preview}»`);
-    lines.push(`   ${priorityReasonLabel(r)}`);
+    const previewLine = formatPreviewLine(preview);
+    if (previewLine) lines.push(previewLine);
+    lines.push(`   ℹ️ ${priorityReasonLabel(r)}`);
   }
   lines.push('', 'برای باز کردن، دکمه گفتگو را بزنید.');
   return lines.join('\n');
@@ -320,7 +360,8 @@ export function formatScanUnreadList(s = {}) {
     const r = show[i];
     const preview = roomPreview(r);
     lines.push(`${toFaNum(i + 1)}. 🔥 مهم · ${guestName(r)} · ${toFaNum(r.unread)}`);
-    if (preview) lines.push(`   «${preview}»`);
+    const previewLine = formatPreviewLine(preview);
+    if (previewLine) lines.push(previewLine);
   }
   if (!show.length && unreadCount > 0) {
     lines.push('جزئیات نام در اولویت‌ها نیست — از «مهم‌ها» ببینید.');
@@ -343,7 +384,7 @@ export function formatScanRoomCard(room = {}, { showDetails = false } = {}) {
     `🏷 ${priorityReasonLabel(room)}`,
   ];
   if (preview) {
-    lines.push('', '💬 آخرین پیام', `«${preview}»`);
+    lines.push('', '💬 آخرین پیام', preview);
   }
   if (showDetails) {
     const id = roomIdOf(room) ?? '—';
@@ -414,7 +455,7 @@ export function buildScanKeyboard(s = {}) {
   const rooms = Array.isArray(s.priorityRooms) ? s.priorityRooms : [];
   const unread = Number(s.unreadOnPage) || 0;
   const pairs = [];
-  if (rooms.length > 0) pairs.push([`🔥 مهم‌ها (${toFaNum(rooms.length)})`, 'scan:priority']);
+  if (rooms.length > 0) pairs.push([`🔥 مشاهده همه (${toFaNum(rooms.length)})`, 'scan:priority']);
   if (unread > 0) pairs.push([`🔔 خوانده‌نشده (${toFaNum(unread)})`, 'scan:unread']);
   pairs.push(['💬 گفتگوها', 'scan:chats']);
   pairs.push(['📊 جزئیات', 'scan:details']);

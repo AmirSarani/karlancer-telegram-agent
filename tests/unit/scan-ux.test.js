@@ -69,13 +69,17 @@ test('B: truncatePersianText is word-aware and redacts secrets', () => {
 
 test('C: success_with_priority summary hides page ratio and room ids', () => {
   const text = formatScanSummary(samplePriority);
-  assert.match(text, /نتیجه اسکن|خلاصه اسکن/);
+  assert.match(text, /اسکن کارلنسر|نتیجه اسکن|خلاصه اسکن/);
   assert.doesNotMatch(text, /1\/102|۱\/۱۰۲/);
   assert.doesNotMatch(text, /7241431/);
   assert.match(text, /Ardeshir\.A/);
-  assert.match(text, /خوانده/);
+  assert.match(text, /پیام جدید|خوانده/);
+  assert.match(text, /نیازمند بررسی/);
+  assert.match(text, /اولویت/);
+  assert.doesNotMatch(text, /🔑 تطابق کلیدواژه/);
   assert.equal(deriveScanState(samplePriority), SCAN_STATES.success_with_priority);
-  assert.ok(text.split('\n').length <= 14);
+  // mini-dashboard + up to 3 priority cards
+  assert.ok(text.split('\n').length <= 24);
 });
 
 test('D: details screen shows page and totals', () => {
@@ -136,7 +140,7 @@ test('H: partial success warns without dropping available results', () => {
 test('I: priority reason uses real reason or conservative label', () => {
   assert.equal(priorityReasonLabel({ reason: 'تطابق کلیدواژه' }), 'تطابق کلیدواژه');
   assert.equal(priorityReasonLabel({ unread: 1 }), 'پیام جدید');
-  assert.match(priorityReasonLabel({}), /بررسی|انتخاب/);
+  assert.match(priorityReasonLabel({}), /اولویت|بررسی|انتخاب/);
   assert.match(priorityBadge({ unread: 1 }).line, /🔥/);
   assert.match(priorityBadge({ matched: true }).line, /🟡|🔥/);
   assert.match(priorityBadge({}).line, /🔵/);
@@ -193,6 +197,41 @@ test('N: buildScanResultMessage packages text+keyboard', () => {
   assert.match(msg.text, /اسکن/);
   assert.ok(msg.reply_markup.inline_keyboard.length >= 1);
   assert.equal(msg.state, SCAN_STATES.success_with_priority);
+});
+
+test('O: summary hierarchy matches needsReview and points to مشاهده همه', () => {
+  const text = formatScanSummary({
+    pageCount: 10,
+    unreadOnPage: 0,
+    matchedCount: 1,
+    scannedAt: new Date().toISOString(),
+    priorityRooms: [
+      { guest_name: 'Mohammad.S', roomId: '1', unread: 0, last_message: 'xss-bypass.png', reason: 'تطابق کلیدواژه' },
+      { guest_name: 'Maryam.S', roomId: '2', unread: 0, last_message: 'پیشنهاد بر روی پروژه «رفع اشکال برنامه object dete' },
+      { guest_name: 'A', roomId: '3', unread: 0, last_message: 'a' },
+      { guest_name: 'B', roomId: '4', unread: 0, last_message: 'b' },
+      { guest_name: 'C', roomId: '5', unread: 0, last_message: 'c' },
+    ],
+  });
+  assert.match(text, /نیازمند بررسی: ۵/);
+  assert.match(text, /پیام جدید: ندارید/);
+  assert.match(text, /Mohammad\.S/);
+  assert.match(text, /تطابق کلیدواژه/);
+  assert.match(text, /📎 xss-bypass\.png/);
+  assert.doesNotMatch(text, /««|»»/);
+  assert.doesNotMatch(text, /برای بررسی انتخاب شده/);
+  assert.doesNotMatch(text, /🔑 تطابق کلیدواژه/);
+  assert.match(text, /و ۲ مورد دیگر/);
+  assert.match(text, /مشاهده همه/);
+  // only top 3 names on the card
+  assert.doesNotMatch(text, /\bC\b/);
+  const kb = buildScanKeyboard({
+    pageCount: 10,
+    unreadOnPage: 0,
+    priorityRooms: Array.from({ length: 5 }, (_, i) => ({ guest_name: `U${i}`, roomId: String(i), unread: 0 })),
+  });
+  const labels = kb.inline_keyboard.flat().map((b) => b.text).join(' ');
+  assert.match(labels, /مشاهده همه/);
 });
 
 test('relative time uses Persian digits', () => {
