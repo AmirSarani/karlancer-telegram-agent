@@ -33,7 +33,7 @@ Data-driven rules for project/invite opportunities. **No hardcoded business poli
 | `NOTIFY` | Telegram card only |
 | `CREATE_BID_DRAFT` | Mark draft / prepare text — no live POST |
 | `REQUEST_APPROVAL` | Enqueue `bids.submit` via PermissionGate + mutation-request (HITL) |
-| `AUTO_EXECUTE` | Would auto — still routed through gate; **this build always `forceRequireApproval`** |
+| `AUTO_EXECUTE` | Limited real auto via PermissionGate + toggles + daily limits; **first N** (`approvalPreviewFirstN`) still force HITL; never unlimited |
 | `IGNORE` | Drop |
 
 Empty `conditions` never match (forces explicit config).

@@ -54,3 +54,26 @@ Set `KARLANCER_ACCESS_TOKEN` in env/secret manager and restart worker **or** cal
 - Cleanup interval: `MCP_SESSION_CLEANUP_INTERVAL_MS` (default 60s)
 - Max sessions: `MCP_MAX_SESSIONS` (default 100); excess → 429 `session_limit_exceeded`
 - Shutdown (SIGINT/SIGTERM) closes transports and deletes session rows
+
+
+## Daily backup (VPS)
+
+```bash
+# one-shot
+cd /opt/karlancer-telegram-agent && bash deploy/scripts/daily-backup.sh
+
+# install cron (~03:15)
+bash scripts/install-daily-backup-cron.sh /opt/karlancer-telegram-agent
+```
+
+Backups land in `data/backups/daily-TIMESTAMP/` (mode 700) with `agent.sqlite` + `.env` copy (`chmod 600`) or `env.gpg` if `BACKUP_GPG_RECIPIENT` is set.
+
+Restore:
+
+```bash
+systemctl stop karlancer-telegram-agent
+bash deploy/scripts/restore-from-daily.sh data/backups/daily-YYYYMMDDTHHMMSS
+systemctl start karlancer-telegram-agent
+```
+
+Secret rotation: see `scripts/rotate-secrets.md` (agent cannot rotate Karlancer password / bot token / root for you).
