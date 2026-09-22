@@ -4,6 +4,8 @@ node_modules/
 .env.*.local
 data/memory/*.json
 !data/memory/.gitkeep
+data/*.sqlite
+data/*.sqlite-*
 storage/*
 !storage/.gitkeep
 *.storage.json
@@ -16,3 +18,22 @@ dist/
 coverage/
 *.log
 npm-debug.log*
+*.tmp
+data/*
+!data/.gitkeep
+!data/memory/
+
+# Private verified mutation config (never commit)
+configs/verified-mutations.local.json
+data/backups/
+
+# Live scan dumps may contain guest names (public repo)
+state/LIVE_SCAN.json
+state/MSG_SHAPE_*.json
+state/PROJECT_SAMPLE.json
+state/ROOM_*_MESSAGES.json
+state/*.local.json
+
+# Private HAR captures (never commit)
+_har_private/
+*.har

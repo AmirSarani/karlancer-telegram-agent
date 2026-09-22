@@ -1,0 +1,64 @@
+{
+  "_readme": [
+    "Copy to configs/verified-mutations.local.json (gitignored) to ENABLE mutations on an operator host.",
+    "Auth header evidence (2026-09-22 live browser): Authorization: Bearer <KARLANCER_ACCESS_TOKEN>; Content-Type: application/json.",
+    "No X-CSRF-TOKEN / X-XSRF-TOKEN observed on API calls. CORS allow-headers: Content-Type, Authorization.",
+    "Client injects Authorization from env; headerTemplates below document the required wire shape (placeholders only — never paste real tokens).",
+    "payloadSchema values must be: bid | message | notifications_read"
+  ],
+  "requiredHeaders": {
+    "Authorization": "Bearer ${KARLANCER_ACCESS_TOKEN}",
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  },
+  "contracts": [
+    {
+      "id": "har-bids-submit-v1",
+      "capability": "bids.submit",
+      "method": "POST",
+      "pathTemplate": "/api/bids",
+      "expectedStatus": [
+        201
+      ],
+      "contractVersion": "har-2026-09-22-v2",
+      "evidence": "HAR POST /api/bids → 201 body milestones[]; live 2026-09-22 Authorization:Bearer confirmed via GET /api/dashboard+/api/profile (login POST /api/login/phone); Content-Type application/json; no CSRF header",
+      "payloadSchema": "bid",
+      "headerTemplates": {
+        "Authorization": "Bearer ${KARLANCER_ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "id": "har-messages-send-v1",
+      "capability": "messages.send",
+      "method": "POST",
+      "pathTemplate": "/api/messages",
+      "expectedStatus": [
+        201
+      ],
+      "contractVersion": "har-2026-09-22-v2",
+      "evidence": "HAR POST /api/messages → 201 body receptor_id+room_id+message+file; live Bearer auth confirmed 2026-09-22; Content-Type application/json; no CSRF",
+      "payloadSchema": "message",
+      "headerTemplates": {
+        "Authorization": "Bearer ${KARLANCER_ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "id": "har-notifications-read-v1",
+      "capability": "notifications.mark_read",
+      "method": "POST",
+      "pathTemplate": "/api/notifications/read",
+      "expectedStatus": [
+        200
+      ],
+      "contractVersion": "har-2026-09-22-v2",
+      "evidence": "HAR POST /api/notifications/read → 200 body {notifications:string[]}; live Bearer auth confirmed 2026-09-22; Content-Type application/json; no CSRF",
+      "payloadSchema": "notifications_read",
+      "headerTemplates": {
+        "Authorization": "Bearer ${KARLANCER_ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+      }
+    }
+  ]
+}

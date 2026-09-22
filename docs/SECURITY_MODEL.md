@@ -1,0 +1,28 @@
+# Security model
+
+Trust boundaries: MCP host → MCP server → adapters → Karlancer → SQLite → Telegram.
+
+- Authorization is server-side (`requireToolPermission`); the model is not a principal.
+- API keys hashed at rest in registry (`sha256`); scopes: read/write/approve/admin.
+- SSRF: adapters only call `https://www.karlancer.com` / `karlancer.com`.
+- Secrets redacted in logs, audit detail, and Markdown projections.
+- Bid/send mutations require explicit approval; no silent auto-submit in default path.
+- Untrusted API JSON is data, never instructions.
+
+
+## Multi-tenant
+
+- Decision: **multi-tenant** with API-key → `tenantId` binding.
+- `MCP_API_KEY` + `MCP_API_KEY_TENANT` (default `default`), or `MCP_API_KEYS=hash:scopes:tenantId`.
+- Cross-tenant job/approval/memory/audit access returns forbidden / not_found.
+- Approval decide recomputes hash from **job** payload; `approvals.payload_json` must exactly equal `jobs.payload_json` or decide fails with `payload_tampered` (job never queued).
+
+## Multi-tenant (hardened)
+
+- Tenant id `default` is **not** a wildcard / super-admin. It is scoped exactly like any other tenant.
+- Cross-tenant job/approval/memory/audit access requires explicit scope `cross_tenant_admin` or `super_admin`.
+- Intelligence (`getInsight` / feedback / pricing memory) is tenant-scoped; feedback from tenant-b must not appear in default or tenant-a.
+
+## Transport honesty
+
+Outbound Karlancer/Telegram/LLM bases must be HTTPS. Bot chat content is **not** E2E — see `docs/SECURITY.md` and `docs/AUTH_FLOW.md`.

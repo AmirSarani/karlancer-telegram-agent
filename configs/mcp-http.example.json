@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "karlancer-remote": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_API_KEY}"
+      }
+    }
+  }
+}

@@ -1,0 +1,489 @@
+/**
+ * Job goal handlers — deterministic where possible; mutations require VerifiedMutationContract.
+ */
+import crypto from 'node:crypto';
+import { logger } from '../observability/logger.js';
+import { memoryAppend } from '../memory/store.js';
+import { bidIdempotencyKey } from '../api/contracts/verified-mutation.js';
+import { createRoomState } from '../agent/room-state.js';
+import { runMessagesPoll } from '../agent/messages-poll.js';
+import { createOpportunityScanner } from '../opportunity/scanner.js';
+
+/**
+ * @param {object} ctx
+ * @param {ReturnType<import('../api/adapters/index.js').createKarlancerApi>} ctx.api
+ * @param {import('better-sqlite3').Database} ctx.db
+ * @param {ReturnType<import('./queue.js').createJobQueue>} ctx.queue
+ * @param {ReturnType<import('../llm/provider.js').createLlmProvider>} [ctx.llm]
+ * @param {import('../intelligence/token-budget.js').TokenBudgetManager} [ctx.budget]
+ * @param {Function} [ctx.onEvent]  projection hook
+ */
+
+const MUTATION_GOALS = new Set(['bids.submit', 'messages.send', 'messages.mark_seen']);
+
+/**
+ * Immediately before a mutation POST: re-validate approval + identity fields.
+ * On any mismatch → no POST.
+ */
+function revalidateMutationBeforePost(ctx, job) {
+  const { queue } = ctx;
+  if (!MUTATION_GOALS.has(job.goal)) return { ok: true };
+  const approval = queue.getApprovalForJob?.(job.jobId) || queue.getApprovalByJobId?.(job.jobId);
+  // Prefer latest approval row if helper missing
+  const row =
+    approval ||
+    (() => {
+      try {
+        return ctx.db
+          .prepare(`SELECT * FROM approvals WHERE job_id = ? ORDER BY created_at DESC LIMIT 1`)
+          .get(job.jobId);
+      } catch {
+        return null;
+      }
+    })();
+
+  if (!row) {
+    return { ok: false, errorCode: 'missing_approval', detail: { reason: 'no_approval_row' } };
+  }
+  if (row.status !== 'approved') {
+    return { ok: false, errorCode: 'approval_not_approved', detail: { status: row.status } };
+  }
+  if (row.expires_at && Date.parse(row.expires_at) < Date.now()) {
+    return { ok: false, errorCode: 'approval_expired', detail: { expiresAt: row.expires_at } };
+  }
+  if ((row.tenant_id || 'default') !== (job.tenantId || 'default')) {
+    return { ok: false, errorCode: 'tenant_mismatch', detail: {} };
+  }
+  if (row.action && row.action !== job.goal) {
+    return { ok: false, errorCode: 'action_mismatch', detail: { action: row.action, goal: job.goal } };
+  }
+  let approvalPayload = {};
+  try {
+    approvalPayload = row.payload_json ? JSON.parse(row.payload_json) : {};
+  } catch {
+    return { ok: false, errorCode: 'approval_payload_unparseable', detail: {} };
+  }
+  const jobPayload = job.payload || {};
+  // Exact payload identity
+  if (JSON.stringify(approvalPayload) !== JSON.stringify(jobPayload)) {
+    return { ok: false, errorCode: 'payload_mismatch', detail: {} };
+  }
+  // targetRef check when present
+  const expectedTarget =
+    jobPayload.projectId != null
+      ? String(jobPayload.projectId)
+      : jobPayload.roomId != null
+        ? String(jobPayload.roomId)
+        : null;
+  if (row.target_ref != null && expectedTarget != null && String(row.target_ref) !== expectedTarget) {
+    return { ok: false, errorCode: 'target_ref_mismatch', detail: {} };
+  }
+  // payload hash when present — recompute via queue helper if available
+  if (row.payload_hash && typeof queue.hashApprovalPayload === 'function') {
+    // no-op; hash lives on module — check stored vs job via decide path already ran
+  }
+  if (row.payload_hash) {
+    // Compare approval payload_json bytes to job payload_json via queue.get raw if needed
+    try {
+      const jobRow = ctx.db.prepare(`SELECT payload_json FROM jobs WHERE job_id = ?`).get(job.jobId);
+      if (jobRow && String(jobRow.payload_json || '') !== String(row.payload_json || '')) {
+        return { ok: false, errorCode: 'payload_hash_mismatch', detail: { reason: 'payload_json_drift' } };
+      }
+    } catch {
+      /* ignore if db not on ctx */
+    }
+  }
+  return { ok: true, approval: row };
+}
+
+export async function handleJob(ctx, job) {
+  const { api, db, llm, budget } = ctx;
+  const goal = job.goal;
+  const p = job.payload || {};
+
+  switch (goal) {
+    case 'rooms.scan': {
+      if (!api.client.hasAuth) {
+        return { ok: false, errorCode: 'missing_auth', detail: 'KARLANCER_ACCESS_TOKEN required' };
+      }
+      const page = p.page || 1;
+      const keywords = p.keywords || ['دعوت', 'همکاری', 'پروژه'];
+      const { rooms, pagination } = await api.rooms.list({ page });
+      const list = rooms.filter(Boolean);
+      const unreadOnPage = list.filter((r) => Number(r.unread) > 0).length;
+      const priorityRooms = [...list]
+        .sort((a, b) => {
+          const au = Number(a.unread) > 0 ? 1 : 0;
+          const bu = Number(b.unread) > 0 ? 1 : 0;
+          if (bu !== au) return bu - au;
+          const at = Date.parse(a.updatedAt || '') || 0;
+          const bt = Date.parse(b.updatedAt || '') || 0;
+          return bt - at;
+        })
+        .slice(0, 5)
+        .map((r) => {
+          const unread = Number(r.unread) || 0;
+          return {
+            guest_name: r.guestName || r.title || '—',
+            roomId: r.id,
+            unread,
+            last_message: String(r.lastMessage || '').slice(0, 120),
+            reason: unread > 0 ? 'پیام جدید' : undefined,
+          };
+        });
+
+      const matched = [];
+      let softFailCount = 0;
+      for (const room of list) {
+        try {
+          const last = (room.lastMessage || '').toLowerCase();
+          if (!keywords.some((kw) => last.includes(String(kw).toLowerCase()))) continue;
+          const msgs = await api.messages.list(room.id, { page: 1 });
+          const invite = msgs.messages.find((m) => m.projectId) || msgs.messages[0];
+          if (!invite?.projectId) continue;
+          const bid = await api.bids.check([invite.projectId]);
+          if (bid.weBidFor(invite.projectId)) continue;
+          let project = null;
+          try {
+            project = await api.projects.get(invite.projectId);
+          } catch (e) {
+            // Public project fetch may 400 for some ids — still keep invite candidate
+            logger.warn('rooms_scan_project_get_failed', {
+              roomId: room.id,
+              projectId: invite.projectId,
+              err: e.message,
+              code: e.code,
+            });
+          }
+          matched.push({
+            roomId: room.id,
+            projectId: invite.projectId,
+            inviteText: invite.text,
+            project: project?.project || null,
+          });
+          memoryAppend(db, {
+            kind: 'invite_seen',
+            refId: room.id,
+            content: invite.text || project?.project?.title || room.id,
+            meta: { projectId: invite.projectId },
+          });
+          memoryAppend(db, {
+            kind: 'room_last_message',
+            refId: room.id,
+            content: room.lastMessage || '',
+            meta: { updatedAt: room.updatedAt },
+          });
+        } catch (e) {
+          softFailCount += 1;
+          logger.warn('rooms_scan_room_failed', { roomId: room?.id, err: e.message, code: e.code });
+        }
+      }
+
+      const scannedAt = new Date().toISOString();
+      const matchedIds = new Set(matched.map((m) => String(m.roomId)));
+      for (const pr of priorityRooms) {
+        if (matchedIds.has(String(pr.roomId))) {
+          pr.reason = pr.reason || 'تطابق کلیدواژه';
+          pr.keywordMatched = true;
+        } else if (!pr.reason) {
+          // leave undefined → UX shows conservative label
+        }
+      }
+      const summary = {
+        page,
+        total: pagination?.total ?? list.length,
+        lastPage: pagination?.lastPage ?? null,
+        pageCount: list.length,
+        unreadOnPage,
+        matchedCount: matched.length,
+        priorityRooms,
+        softFailCount,
+        partial: softFailCount > 0,
+        scannedAt,
+      };
+      // Persist for /status and /start (optional kv)
+      try {
+        db.prepare(
+          `INSERT INTO kv (key, value, updated_at) VALUES ('last_scan_summary', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        ).run(JSON.stringify(summary), scannedAt);
+      } catch (e) {
+        logger.warn('last_scan_kv_failed', { err: e.message });
+      }
+      await emit(ctx, 'rooms.scanned', summary);
+      return { ok: true, result: { ...summary, matched } };
+    }
+
+
+    case 'messages.poll': {
+      const roomState = createRoomState(db);
+      const out = await runMessagesPoll({ api, db, roomState }, p);
+      if (!out.ok) {
+        return { ok: false, errorCode: out.errorCode, detail: out.detail };
+      }
+      await emit(ctx, 'messages.polled', {
+        polledAt: out.result.polledAt,
+        freshCount: out.result.freshCount,
+        newCards: out.result.newCards,
+        pendingDecisions: out.result.pendingDecisions,
+        unreadOnPage: out.result.unreadOnPage,
+        sendApiLive: out.result.sendApiLive,
+        cards: out.result.cards,
+        priorityUnread: out.result.priorityUnread,
+      });
+      return out;
+    }
+
+    case 'project.get': {
+      const project = await api.projects.get(p.projectId, { slug: p.slug });
+      memoryAppend(db, {
+        kind: 'project_viewed',
+        refId: String(p.projectId),
+        content: project.project?.title || String(p.projectId),
+        meta: { slug: project.slug },
+      });
+      return { ok: true, result: project };
+    }
+
+    case 'messages.list': {
+      const data = await api.messages.list(p.roomId, { page: p.page || 1 });
+      if (data.messages[0]) {
+        memoryAppend(db, {
+          kind: 'room_last_message',
+          refId: String(p.roomId),
+          content: data.messages[0].text || '',
+          meta: { messageId: data.messages[0].id },
+        });
+      }
+      return {
+        ok: true,
+        result: {
+          roomId: data.roomId,
+          page: data.page,
+          count: data.messages.length,
+          messages: data.messages,
+          pagination: data.pagination,
+        },
+      };
+    }
+
+    case 'bids.check': {
+      const data = await api.bids.check(p.projectIds || p.projectId);
+      return { ok: true, result: data };
+    }
+
+    case 'bids.submit': {
+      {
+        const v = revalidateMutationBeforePost(ctx, job);
+        if (!v.ok) {
+          ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+            errorCode: v.errorCode,
+            result: v.detail,
+          });
+          return { ok: false, errorCode: v.errorCode, detail: v.detail, terminal: true, posted: false };
+        }
+      }
+      // MUST use VerifiedMutationContract; no try-list. No auto-retry on unknown.
+      const operationId =
+        job.operationId ||
+        p.operationId ||
+        bidIdempotencyKey({
+          projectId: p.projectId,
+          proposalText: p.proposalText,
+          price: p.price,
+          days: p.days,
+        });
+      const data = await api.bids.submit({
+        projectId: p.projectId,
+        proposalText: p.proposalText,
+        price: p.price,
+        days: p.days,
+        operationId,
+      });
+
+      if (!data.ok) {
+        const code = data.status || 'blocked_by_missing_api';
+        // timeout / unknown after POST → needs_reconciliation, NEVER retry POST
+        ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+          errorCode: code,
+          result: data,
+        });
+        await emit(ctx, 'bid.blocked', { code, posted: data.posted === true });
+        return { ok: false, errorCode: 'needs_reconciliation', detail: data, terminal: true };
+      }
+
+      try {
+        const check = await api.bids.check([p.projectId]);
+        if (!check.weBidFor(p.projectId)) {
+          ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+            errorCode: 'bid_not_visible_yet',
+            result: { submit: data, check },
+          });
+          return {
+            ok: false,
+            errorCode: 'needs_reconciliation',
+            detail: { submit: data, check },
+            terminal: true,
+          };
+        }
+      } catch (e) {
+        logger.warn('bid_reconcile_check_failed', { err: e.message });
+        ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+          errorCode: 'reconcile_check_failed',
+          result: { submit: data },
+        });
+        return { ok: false, errorCode: 'needs_reconciliation', detail: { submit: data }, terminal: true };
+      }
+      await emit(ctx, 'bid.submitted', { projectId: p.projectId });
+      return { ok: true, result: data };
+    }
+
+    case 'messages.send': {
+      {
+        const v = revalidateMutationBeforePost(ctx, job);
+        if (!v.ok) {
+          ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+            errorCode: v.errorCode,
+            result: v.detail,
+          });
+          return { ok: false, errorCode: v.errorCode, detail: v.detail, terminal: true, posted: false };
+        }
+      }
+      const operationId = job.operationId || p.operationId || crypto.randomUUID();
+      const data = await api.messages.send(p.roomId, p.text, { operationId, receptorId: p.receptorId });
+      if (!data.ok) {
+        ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+          errorCode: data.status || 'blocked_by_missing_api',
+          result: data,
+        });
+        await emit(ctx, 'message.blocked', { code: data.status, posted: data.posted === true });
+        return { ok: false, errorCode: 'needs_reconciliation', detail: data, terminal: true };
+      }
+      await emit(ctx, 'message.sent', { roomId: p.roomId });
+      return { ok: true, result: data };
+    }
+
+    case 'project.analyze': {
+      const project = p.project || (await api.projects.get(p.projectId)).project;
+      if (budget) {
+        const decision = budget.decide({
+          intent: 'analyze_project',
+          cacheKey: `analyze:${p.projectId || project?.id}`,
+          estimatedTokens: 2000,
+        });
+        if (decision === 'budget_exceeded') {
+          return { ok: false, errorCode: 'budget_exceeded', detail: {}, terminal: true };
+        }
+        if (decision === 'use_cache') {
+          return { ok: true, result: { analysis: budget.getCache(`analyze:${p.projectId || project?.id}`), cached: true } };
+        }
+      }
+      if (!llm) {
+        return { ok: false, errorCode: 'llm_disabled', detail: { note: 'LLM provider not configured' } };
+      }
+      const out = await llm.analyzeProject({
+        title: project?.title,
+        description: project?.description,
+        budget: project?.budget,
+        pages: p.pages,
+        integrations: p.integrations,
+      });
+      if (out.ok && budget) {
+        budget.putCache(`analyze:${p.projectId || project?.id}`, out.data);
+      }
+      memoryAppend(db, {
+        kind: 'project_analysis',
+        refId: String(p.projectId || project?.id || ''),
+        content: out.data?.summary || '',
+        meta: { confidence: out.data?.confidence, source: out.source },
+      });
+      await emit(ctx, 'project.analyzed', { projectId: p.projectId });
+      return { ok: true, result: out };
+    }
+
+    case 'proposal.draft': {
+      if (!llm) {
+        return { ok: false, errorCode: 'llm_disabled', detail: {} };
+      }
+      const out = await llm.draftProposal({
+        project: p.project,
+        analysis: p.analysis,
+        pricing: p.pricing,
+      });
+      memoryAppend(db, {
+        kind: 'proposal_draft',
+        refId: String(p.projectId || ''),
+        content: out.data?.proposal_text?.slice(0, 500) || '',
+        meta: { price: out.data?.price, source: out.source },
+      });
+      // Draft only — never auto-send
+      return { ok: true, result: { ...out, requiresApproval: true, autoSend: false } };
+    }
+
+    case 'chat.draft_reply': {
+      if (!llm) {
+        return { ok: false, errorCode: 'llm_disabled', detail: {} };
+      }
+      const out = await llm.draftChatReply({
+        roomContext: p.roomContext,
+        employerMessage: p.employerMessage || p.text,
+      });
+      return { ok: true, result: { ...out, requiresApproval: true, autoSend: false } };
+    }
+
+    case 'health.ping': {
+      return { ok: true, result: { pong: true, ts: new Date().toISOString() } };
+    }
+
+    case 'reconcile.bids': {
+      if (!p.projectId) return { ok: false, errorCode: 'invalid_input', detail: {} };
+      const check = await api.bids.check([p.projectId]);
+      return { ok: true, result: { projectId: p.projectId, weBid: check.weBidFor(p.projectId), check } };
+    }
+
+    case 'opportunities.scan': {
+      const scanner = createOpportunityScanner({
+        db,
+        api,
+        mutations: ctx.mutations || null,
+        tenantId: job.tenantId || 'default',
+        notify: ctx.notifyOpportunity || null,
+      });
+      // Respect agent pause / emergency via scanner internals + settings
+      const settings = scanner.settingsStore.get();
+      if (settings.emergencyStop && !p.manual) {
+        // still allow analyze-only path inside scanner; it downgrades AUTO_EXECUTE
+      }
+      const out = await scanner.scan({
+        manual: Boolean(p.manual),
+        pages: p.pages || 1,
+        includeInvites: p.includeInvites !== false,
+        searchParams: p.searchParams || {},
+      });
+      await emit(ctx, 'opportunities.scanned', {
+        scannedAt: out.scannedAt,
+        scanned: out.scanned,
+        newCount: out.newCount,
+        matched: out.matched,
+        drafts: out.drafts,
+        notified: out.notified,
+        skipped: out.skipped || false,
+        reason: out.reason || null,
+      });
+      return { ok: Boolean(out.ok), result: out };
+    }
+
+    default:
+      return { ok: false, errorCode: 'unknown_goal', detail: { goal } };
+  }
+}
+
+async function emit(ctx, type, payload) {
+  if (typeof ctx.onEvent === 'function') {
+    try {
+      await ctx.onEvent(type, payload);
+    } catch (e) {
+      logger.warn('onEvent_failed', { type, err: e.message });
+    }
+  }
+}

@@ -1,0 +1,62 @@
+# Production-like single-node stack.
+# IMPORTANT: SQLite is single-node — do not scale replicas sharing one DB volume.
+services:
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["node", "src/worker/runner.js"]
+    env_file: ../.env
+    environment:
+      ENABLE_TELEGRAM: "false"
+      ENABLE_WORKER: "true"
+    volumes:
+      - agent-data:/app/data
+      - agent-state:/app/state
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "const Database=require('better-sqlite3'); const d=new Database(process.env.DB_PATH||'./data/agent.sqlite',{readonly:true}); d.prepare('select 1').get(); process.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  mcp-http:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["node", "src/mcp/http-entry.js"]
+    env_file: ../.env
+    environment:
+      ENABLE_TELEGRAM: "false"
+      MCP_HTTP_HOST: "0.0.0.0"
+    ports:
+      - "8787:8787"
+    volumes:
+      - agent-data:/app/data
+      - agent-state:/app/state
+    restart: unless-stopped
+    depends_on:
+      - worker
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  # Optional Telegram control plane — only if ENABLE_TELEGRAM=true in .env
+  agent-telegram:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["node", "src/index.js"]
+    env_file: ../.env
+    profiles: ["telegram"]
+    volumes:
+      - agent-data:/app/data
+      - agent-state:/app/state
+    restart: unless-stopped
+
+volumes:
+  agent-data:
+  agent-state:

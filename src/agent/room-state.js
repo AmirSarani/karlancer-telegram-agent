@@ -1,0 +1,212 @@
+/**
+ * Per-room KV state: poll cursors, drafts, owner notes, decisions.
+ * No PII dumps beyond what the API already returned into content fields.
+ */
+import { redactDeep } from '../security/redaction.js';
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function kvGet(db, key) {
+  try {
+    const row = db.prepare(`SELECT value, updated_at FROM kv WHERE key = ?`).get(key);
+    if (!row?.value) return null;
+    try {
+      return { value: JSON.parse(row.value), updatedAt: row.updated_at };
+    } catch {
+      return { value: row.value, updatedAt: row.updated_at };
+    }
+  } catch {
+    return null;
+  }
+}
+
+function kvSet(db, key, value) {
+  const ts = nowIso();
+  const serialized = typeof value === 'string' ? value : JSON.stringify(redactDeep(value));
+  db.prepare(
+    `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+  ).run(key, serialized, ts);
+  return ts;
+}
+
+const cursorKey = (roomId) => `room:${roomId}:cursor`;
+const draftKey = (roomId) => `room:${roomId}:draft`;
+const noteKey = (roomId) => `room:${roomId}:note`;
+const decisionKey = (roomId) => `room:${roomId}:decision`;
+const cardKey = (roomId) => `room:${roomId}:card`;
+const seenKey = (roomId) => `room:${roomId}:seen_ids`;
+const pendingIndexKey = 'rooms:pending_decisions';
+const pollHealthKey = 'messages_poll_health';
+const awaitingNoteKey = (userId) => `tg:awaiting_note:${userId}`;
+
+/**
+ * @param {import('better-sqlite3').Database} db
+ */
+export function createRoomState(db) {
+  return {
+    getCursor(roomId) {
+      const row = kvGet(db, cursorKey(roomId));
+      return row?.value && typeof row.value === 'object' ? row.value : null;
+    },
+
+    setCursor(roomId, cursor) {
+      return kvSet(db, cursorKey(roomId), {
+        lastUpdatedAt: cursor?.lastUpdatedAt || null,
+        lastMessageId: cursor?.lastMessageId || null,
+        lastPolledAt: nowIso(),
+      });
+    },
+
+    getSeenIds(roomId) {
+      const row = kvGet(db, seenKey(roomId));
+      const arr = Array.isArray(row?.value) ? row.value : row?.value?.ids || [];
+      return new Set(arr.map(String));
+    },
+
+    addSeenIds(roomId, ids) {
+      const set = this.getSeenIds(roomId);
+      for (const id of ids || []) {
+        if (id != null) set.add(String(id));
+      }
+      // Cap to last 500 ids to keep kv small
+      const arr = [...set];
+      const trimmed = arr.length > 500 ? arr.slice(arr.length - 500) : arr;
+      kvSet(db, seenKey(roomId), { ids: trimmed });
+      return new Set(trimmed);
+    },
+
+    getDraft(roomId) {
+      const row = kvGet(db, draftKey(roomId));
+      return row?.value && typeof row.value === 'object' ? row.value : null;
+    },
+
+    setDraft(roomId, draft) {
+      return kvSet(db, draftKey(roomId), {
+        text: String(draft?.text || ''),
+        source: draft?.source || 'template',
+        updatedAt: nowIso(),
+        meta: draft?.meta || {},
+      });
+    },
+
+    getNote(roomId) {
+      const row = kvGet(db, noteKey(roomId));
+      return row?.value && typeof row.value === 'object' ? row.value : null;
+    },
+
+    setNote(roomId, noteText) {
+      return kvSet(db, noteKey(roomId), {
+        text: String(noteText || '').slice(0, 4000),
+        updatedAt: nowIso(),
+      });
+    },
+
+    getDecision(roomId) {
+      const row = kvGet(db, decisionKey(roomId));
+      return row?.value && typeof row.value === 'object' ? row.value : null;
+    },
+
+    setDecision(roomId, decision) {
+      const ts = kvSet(db, decisionKey(roomId), {
+        status: decision?.status || 'pending', // pending | approved | rejected | blocked
+        updatedAt: nowIso(),
+        detail: decision?.detail || null,
+      });
+      this._syncPendingIndex(roomId, decision?.status || 'pending');
+      return ts;
+    },
+
+    getCard(roomId) {
+      const row = kvGet(db, cardKey(roomId));
+      return row?.value && typeof row.value === 'object' ? row.value : null;
+    },
+
+    setCard(roomId, card) {
+      const ts = kvSet(db, cardKey(roomId), card);
+      const status = this.getDecision(roomId)?.status || 'pending';
+      if (status === 'pending' || status === 'blocked') {
+        this._syncPendingIndex(roomId, 'pending');
+      }
+      return ts;
+    },
+
+    _syncPendingIndex(roomId, status) {
+      const row = kvGet(db, pendingIndexKey);
+      /** @type {string[]} */
+      let ids = Array.isArray(row?.value?.ids) ? row.value.ids.map(String) : [];
+      const rid = String(roomId);
+      if (status === 'pending' || status === 'blocked') {
+        if (!ids.includes(rid)) ids.push(rid);
+      } else {
+        ids = ids.filter((x) => x !== rid);
+      }
+      // Cap index
+      if (ids.length > 200) ids = ids.slice(-200);
+      kvSet(db, pendingIndexKey, { ids, updatedAt: nowIso() });
+    },
+
+    listPendingRoomIds() {
+      const row = kvGet(db, pendingIndexKey);
+      return Array.isArray(row?.value?.ids) ? row.value.ids.map(String) : [];
+    },
+
+    pendingCount() {
+      return this.listPendingRoomIds().length;
+    },
+
+    setPollHealth(health) {
+      return kvSet(db, pollHealthKey, {
+        ...health,
+        updatedAt: nowIso(),
+      });
+    },
+
+    getPollHealth() {
+      const row = kvGet(db, pollHealthKey);
+      return row?.value && typeof row.value === 'object' ? row.value : null;
+    },
+
+    setAwaitingNote(userId, roomId) {
+      return kvSet(db, awaitingNoteKey(userId), { roomId: String(roomId), at: nowIso() });
+    },
+
+    getAwaitingNote(userId) {
+      const row = kvGet(db, awaitingNoteKey(userId));
+      return row?.value?.roomId ? String(row.value.roomId) : null;
+    },
+
+    clearAwaitingNote(userId) {
+      try {
+        db.prepare(`DELETE FROM kv WHERE key = ?`).run(awaitingNoteKey(userId));
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+}
+
+/**
+ * Merge owner note into an existing draft text (deterministic, no LLM).
+ * Used when LLM is unavailable or as baseline before AI polish.
+ * @param {{ text?: string }} draft
+ * @param {string} note
+ */
+export function mergeNoteIntoDraft(draft, note) {
+  const base = String(draft?.text || '').trim();
+  const n = String(note || '').trim();
+  if (!n) return { text: base, source: draft?.source || 'template' };
+  if (!base) {
+    return {
+      text: n,
+      source: 'note_only',
+    };
+  }
+  // Append a short acknowledgement of owner guidance without dumping the note verbatim twice
+  const merged = `${base}\n\n—\n(توجه مالک: ${n.slice(0, 500)})`;
+  return { text: merged, source: 'template+note' };
+}
+
+export default createRoomState;

@@ -1,0 +1,14 @@
+[Unit]
+Description=Karlancer MCP HTTP
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/karlancer-telegram-agent
+EnvironmentFile=/opt/karlancer-telegram-agent/.env
+ExecStart=/usr/bin/node src/mcp/http-entry.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
