@@ -10,6 +10,29 @@ const ROBOTIC_LINE_RE =
 const TECH_LEAK_RE =
   /\b(blocked_by_missing_api|roomId|projectId|project_slug|verifiedmutation|messages\.send)\b/gi;
 
+
+/**
+ * Cheap, safe Persian orthography pass (no external deps).
+ * Prefer LLM prompt rules; this only fixes mechanical tells.
+ * @param {string} s
+ */
+function applyPersianOrthographyLight(s) {
+  let out = String(s || '');
+  // Arabic ye/kaf → Persian
+  out = out.replace(/\u064A/g, '\u06CC').replace(/\u0643/g, '\u06A9');
+  // Arabic-Indic digits → Persian digits
+  out = out.replace(/[\u0660-\u0669]/g, (ch) =>
+    String.fromCharCode(0x06f0 + (ch.charCodeAt(0) - 0x0660))
+  );
+  // Em/en dashes → Persian comma (AI tell)
+  out = out.replace(/[\u2014\u2013]/g, '،');
+  // می / نمی + space + Persian letter → ZWNJ
+  out = out.replace(/(ن?می)\s+(?=[\u0600-\u06FF])/g, '$1\u200C');
+  // Plural ها after a Persian word (avoid pronoun «ها» at line start)
+  out = out.replace(/([\u0600-\u06FF])\s+ها(?=[\s\u060C\u061B\u061F.؟!»"']|$)/g, '$1\u200Cها');
+  return out;
+}
+
 /**
  * Clean a draft reply so it reads like a real freelancer wrote it.
  * @param {string} text
@@ -47,7 +70,7 @@ export function cleanHumanReply(text) {
   s = s.replace(/با\s*توجه\s*به\s*درخواستتان\s*[(\[«"']([^)\]»"']{0,200})[)\]»"']\s*/gi, '');
   s = s.replace(/در\s*مورد\s*درخواستتان\s*[(\[«"']([^)\]»"']{0,200})[)\]»"']\s*/gi, '');
   s = s.replace(/آماده‌?ام\s*همکاری\s*کنم\.?/gi, '');
-  s = s.replace(/می‌باشد\.?/g, 'است.');
+  s = s.replace(/می[\u200C\s]*باشد\.?/g, 'است.');
 
   // Strip decorative wrapping quotes/parens that dump project titles mid-sentence
   // Keep meaningful punctuation: ؟ ! . ، :
@@ -79,6 +102,10 @@ export function cleanHumanReply(text) {
   s = s.replace(/\(\s*[،.]?\s*\)/g, '');
 
   // Collapse spaces again after removals
+  s = s.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+
+  // Light orthography (ZWNJ / ی‌ک / digits / dash) — safe mechanical only
+  s = applyPersianOrthographyLight(s);
   s = s.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 
   // Soft length cap for Telegram draft display
