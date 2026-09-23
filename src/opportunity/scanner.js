@@ -78,18 +78,29 @@ export function createOpportunityScanner(deps) {
     const now = new Date();
     const nowIso = now.toISOString();
 
+    function archiveSkipped(reason) {
+      const out = { ok: true, skipped: true, reason, scannedAt: nowIso, scanned: 0, newCount: 0, matched: 0 };
+      try {
+        const run = store.recordScanRun(out);
+        out.scanRunId = run.id;
+      } catch {
+        /* ignore archive errors on skip */
+      }
+      return out;
+    }
+
     if (!opts.manual && scanState.paused) {
-      return { ok: true, skipped: true, reason: 'scan_paused', scannedAt: nowIso };
+      return archiveSkipped('scan_paused');
     }
     if (settings.emergencyStop && !opts.manual && scanState.paused) {
-      return { ok: true, skipped: true, reason: 'emergency_paused', scannedAt: nowIso };
+      return archiveSkipped('emergency_paused');
     }
     if (
       !opts.manual &&
       scanState.cooldownUntil &&
       Date.parse(scanState.cooldownUntil) > Date.now()
     ) {
-      return { ok: true, skipped: true, reason: 'cooldown', scannedAt: nowIso };
+      return archiveSkipped('cooldown');
     }
 
     syncScoringAvailable();
@@ -247,6 +258,17 @@ export function createOpportunityScanner(deps) {
         },
       });
 
+      try {
+        store.recordAction({
+          type: decisionOut.decision === 'IGNORE' ? 'skipped' : 'analyzed',
+          oppId: opp.id,
+          note: `${decisionOut.decision} · امتیاز ${scored.score ?? '—'}`,
+          preview: opp.title || null,
+        });
+      } catch {
+        /* book action optional */
+      }
+
       results.analyzed += 1;
       if (matched.length) results.matched += 1;
       if (decisionOut.decision === 'IGNORE') results.ignored += 1;
@@ -306,6 +328,22 @@ export function createOpportunityScanner(deps) {
       cooldownUntil: new Date(Date.now() + 60_000).toISOString(),
     });
 
+    // Always archive into «کتاب فرصت‌ها» — even quiet scans (جدید ۰ / silent notify).
+    let scanRun = null;
+    try {
+      scanRun = store.recordScanRun({
+        ...results,
+        examined: results.scanned,
+        drafted: results.drafts,
+        projectIds: unique.map((u) => u.id),
+        at: nowIso,
+      });
+      results.scanRunId = scanRun.id;
+      store.pruneBook();
+    } catch (e) {
+      logger.warn('opportunity_book_archive_failed', { err: e?.message || String(e) });
+    }
+
     logger.info('opportunity_scan_done', {
       scanned: results.scanned,
       newCount: results.newCount,
@@ -313,6 +351,7 @@ export function createOpportunityScanner(deps) {
       drafts: results.drafts,
       autoExecuted: results.autoExecuted,
       errors: errors.length,
+      scanRunId: results.scanRunId || null,
     });
 
     return results;
@@ -462,10 +501,38 @@ async function applySideEffects({
       decision,
       reasons,
     });
+    try {
+      store.recordAction({
+        type: 'notify',
+        oppId: opp.id,
+        note: decision,
+        preview: opp.title || null,
+      });
+    } catch {
+      /* ignore */
+    }
   }
 
   if (decision === 'CREATE_DRAFT') {
     store.setState(opp.id, 'ACTION_CREATED');
+    try {
+      const smart = buildSmartBid(opp, profile, { score, reasons });
+      store.upsertDraft({
+        oppId: opp.id,
+        body: smart.text,
+        suggestedPrice: smart.price ?? opp.budgetMin ?? opp.budgetMax ?? null,
+        suggestedDays: smart.days ?? 7,
+        status: 'pending',
+      });
+      store.recordAction({
+        type: 'draft_prepared',
+        oppId: opp.id,
+        note: 'پیش‌نویس پیشنهاد',
+        preview: String(smart.text || '').slice(0, 200),
+      });
+    } catch (e) {
+      logger.warn('opportunity_draft_archive_failed', { projectId: opp.id, err: e?.message });
+    }
     return { drafted: true };
   }
 
@@ -476,6 +543,23 @@ async function applySideEffects({
     const smart = buildSmartBid(opp, profile, { score, reasons });
     const price = smart.price ?? opp.budgetMin ?? opp.budgetMax ?? 1_000_000;
     const days = smart.days ?? 7;
+    try {
+      store.upsertDraft({
+        oppId: opp.id,
+        body: smart.text,
+        suggestedPrice: price,
+        suggestedDays: days,
+        status: 'pending',
+      });
+      store.recordAction({
+        type: 'draft_prepared',
+        oppId: opp.id,
+        note: decision === 'AUTO_EXECUTE' ? 'پیش‌نویس خودکار' : 'پیش‌نویس برای تأیید',
+        preview: String(smart.text || '').slice(0, 200),
+      });
+    } catch (e) {
+      logger.warn('opportunity_draft_archive_failed', { projectId: opp.id, err: e?.message });
+    }
 
     // Limited real AUTO_EXECUTE: first N of the day still force HITL preview.
     // Never unlimited — gate + toggles + daily limits already enforced in decideOpportunity.
@@ -541,6 +625,19 @@ async function applySideEffects({
     }
 
     void decisionOut;
+    try {
+      store.recordAction({
+        type:
+          Boolean(result?.autoExecuted) && liveAllowed && !contractMissing
+            ? 'auto_enqueued'
+            : 'sent_to_approvals',
+        oppId: opp.id,
+        note: forceRequireApproval ? 'منتظر تأیید' : 'صف جهش',
+        preview: opp.title || null,
+      });
+    } catch {
+      /* ignore */
+    }
     return {
       enqueued: true,
       autoExecuted: Boolean(result?.autoExecuted) && liveAllowed && !contractMissing,

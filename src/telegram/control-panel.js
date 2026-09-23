@@ -147,12 +147,14 @@ export function eyesMenuKeyboard() {
 export function brainMenuKeyboard() {
   const kb = new InlineKeyboard()
     .text('🔥 فرصت‌ها', CP.BRAIN_OPP)
+    .text('📚 کتاب فرصت‌ها', 'book:home')
+    .row()
     .text('👤 پروفایل امتیاز', CP.BRAIN_PROF)
-    .row()
     .text('📜 قوانین فرصت', CP.BRAIN_RULES)
-    .text('📡 اسکن فرصت', CP.BRAIN_SCAN)
     .row()
+    .text('📡 اسکن فرصت', CP.BRAIN_SCAN)
     .text('🗂 تاریخچه تصمیم', CP.BRAIN_HIST)
+    .row()
     .text('📥 صندوق تصمیم', 'goto:inbox');
   backHome(kb);
   return kb;

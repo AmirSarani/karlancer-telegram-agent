@@ -73,6 +73,27 @@ import {
   decisionInboxKeyboard,
   parseOpportunityCallback,
 } from './opportunity-ux.js';
+import {
+  BOOK_PAGE_SIZE,
+  BOOK_NEW_WITHIN_HOURS,
+  parseBookCallback,
+  formatBookHome,
+  bookHomeKeyboard,
+  formatBookOppList,
+  bookOppListKeyboard,
+  formatBookActions,
+  bookActionsKeyboard,
+  formatBookDrafts,
+  bookDraftsKeyboard,
+  formatBookDraftDetail,
+  bookDraftDetailKeyboard,
+  formatBookScans,
+  bookScansKeyboard,
+  formatBookScanRun,
+  bookScanRunKeyboard,
+  formatBookOppDetail,
+  bookOppDetailKeyboard,
+} from './opportunity-book.js';
 import { createOpportunityScanner } from '../opportunity/scanner.js';
 import { createOpportunityStore } from '../opportunity/store.js';
 import { isScoringConfigured } from '../opportunity/scoring.js';
@@ -1238,7 +1259,187 @@ async function replyMode(ctx, { edit = false } = {}) {
     );
   }
 
-  async function replyDecisionInbox(ctx, { edit = false } = {}) {
+
+  async function replyOpportunityBook(ctx, { edit = false } = {}) {
+    if (!db) {
+      await ctx.reply('کتاب فرصت‌ها در دسترس نیست.', menuOpts());
+      return;
+    }
+    const store = createOpportunityStore(db);
+    const threshold = store.getHighScoreThreshold();
+    const textOut = formatBookHome({
+      total: store.countOpportunities(),
+      newCount: store.countNewOpportunities({ withinHours: BOOK_NEW_WITHIN_HOURS }),
+      highCount: store.countHighScore({ minScore: threshold }),
+      highScoreThreshold: threshold,
+      draftCount: store.countDrafts({ status: 'pending' }),
+      actionCount: store.countActions(),
+      scanCount: store.countScanRuns(),
+    });
+    await editOrReply(ctx, textOut, { reply_markup: bookHomeKeyboard() }, { edit });
+  }
+
+  async function replyBookSection(ctx, section, page = 0, { edit = true, scanId = null } = {}) {
+    if (!db) {
+      await ctx.reply('کتاب فرصت‌ها در دسترس نیست.', menuOpts());
+      return;
+    }
+    const store = createOpportunityStore(db);
+    const safePage = Math.max(0, Number(page) || 0);
+    const limit = BOOK_PAGE_SIZE;
+    const offset = safePage * limit;
+
+    if (section === 'new') {
+      const total = store.countNewOpportunities({ withinHours: BOOK_NEW_WITHIN_HOURS });
+      const items = store.listNewOpportunities({
+        withinHours: BOOK_NEW_WITHIN_HOURS,
+        limit,
+        offset,
+      });
+      await editOrReply(
+        ctx,
+        formatBookOppList({
+          title: '🆕 جدیدها',
+          items,
+          total,
+          page: safePage,
+          emptyKey: 'new',
+        }),
+        { reply_markup: bookOppListKeyboard(items, { prefix: 'book:new', page: safePage, total }) },
+        { edit }
+      );
+      return;
+    }
+    if (section === 'high') {
+      const threshold = store.getHighScoreThreshold();
+      const total = store.countHighScore({ minScore: threshold });
+      const items = store.listHighScore({ minScore: threshold, limit, offset });
+      await editOrReply(
+        ctx,
+        formatBookOppList({
+          title: `⭐ امتیاز بالا (≥ ${threshold})`,
+          items,
+          total,
+          page: safePage,
+          emptyKey: 'high',
+        }),
+        { reply_markup: bookOppListKeyboard(items, { prefix: 'book:hi', page: safePage, total }) },
+        { edit }
+      );
+      return;
+    }
+    if (section === 'all') {
+      const total = store.countOpportunities();
+      const items = store.list({ limit, offset, orderBy: 'last_seen' });
+      await editOrReply(
+        ctx,
+        formatBookOppList({
+          title: '📋 همه فرصت‌ها',
+          items,
+          total,
+          page: safePage,
+          emptyKey: 'all',
+        }),
+        { reply_markup: bookOppListKeyboard(items, { prefix: 'book:all', page: safePage, total }) },
+        { edit }
+      );
+      return;
+    }
+    if (section === 'drafts') {
+      const total = store.countDrafts({ status: 'pending' });
+      const drafts = store.listDrafts({ status: 'pending', limit, offset });
+      const oppsById = {};
+      for (const d of drafts) {
+        const row = store.get(d.oppId);
+        if (row) oppsById[d.oppId] = row;
+      }
+      await editOrReply(
+        ctx,
+        formatBookDrafts(drafts, oppsById, { total, page: safePage }),
+        { reply_markup: bookDraftsKeyboard(drafts, { page: safePage, total }) },
+        { edit }
+      );
+      return;
+    }
+    if (section === 'actions') {
+      const total = store.countActions();
+      const actions = store.listActions({ limit, offset });
+      await editOrReply(
+        ctx,
+        formatBookActions(actions, { total, page: safePage }),
+        { reply_markup: bookActionsKeyboard(actions, { page: safePage, total }) },
+        { edit }
+      );
+      return;
+    }
+    if (section === 'scans') {
+      const total = store.countScanRuns();
+      const runs = store.listScanRuns({ limit, offset });
+      await editOrReply(
+        ctx,
+        formatBookScans(runs, { total, page: safePage }),
+        { reply_markup: bookScansKeyboard(runs, { page: safePage, total }) },
+        { edit }
+      );
+      return;
+    }
+    if (section === 'scan_run' && scanId) {
+      const run = store.getScanRun(scanId);
+      if (!run) {
+        await editOrReply(
+          ctx,
+          'اسکن پیدا نشد.',
+          { reply_markup: bookHomeKeyboard() },
+          { edit }
+        );
+        return;
+      }
+      const items = store.listOpportunitiesForScanRun(scanId, { limit, offset });
+      await editOrReply(
+        ctx,
+        formatBookScanRun(run, items, { page: safePage }),
+        { reply_markup: bookScanRunKeyboard(run, items, { page: safePage }) },
+        { edit }
+      );
+      return;
+    }
+    await replyOpportunityBook(ctx, { edit });
+  }
+
+  async function replyBookOpp(ctx, oppId, { edit = true } = {}) {
+    if (!db) return;
+    const store = createOpportunityStore(db);
+    const row = store.get(oppId);
+    if (!row) {
+      await editOrReply(ctx, 'فرصت پیدا نشد.', { reply_markup: bookHomeKeyboard() }, { edit });
+      return;
+    }
+    await editOrReply(
+      ctx,
+      formatBookOppDetail(row),
+      { reply_markup: bookOppDetailKeyboard(row.id) },
+      { edit }
+    );
+  }
+
+  async function replyBookDraft(ctx, draftId, { edit = true } = {}) {
+    if (!db) return;
+    const store = createOpportunityStore(db);
+    const draft = store.getDraft(draftId);
+    if (!draft) {
+      await editOrReply(ctx, 'پیش‌نویس پیدا نشد.', { reply_markup: bookHomeKeyboard() }, { edit });
+      return;
+    }
+    const opp = store.get(draft.oppId);
+    await editOrReply(
+      ctx,
+      formatBookDraftDetail(draft, opp),
+      { reply_markup: bookDraftDetailKeyboard(draft) },
+      { edit }
+    );
+  }
+
+    async function replyDecisionInbox(ctx, { edit = false } = {}) {
     if (!db) {
       await ctx.reply('صندوق در دسترس نیست.', menuOpts());
       return;
@@ -1355,6 +1556,23 @@ async function replyMode(ctx, { edit = false } = {}) {
         days: smart.days,
       });
     }
+    try {
+      store.upsertDraft({
+        oppId: String(projectId),
+        body: smart.text,
+        suggestedPrice: smart.price ?? null,
+        suggestedDays: smart.days ?? 7,
+        status: 'pending',
+      });
+      store.recordAction({
+        type: 'draft_prepared',
+        oppId: String(projectId),
+        note: 'پیش‌نویس از تلگرام',
+        preview: String(smart.text || '').slice(0, 200),
+      });
+    } catch {
+      /* ignore */
+    }
     await editOrReply(ctx, smart.previewFa, { reply_markup: smartBidKeyboard(projectId) }, { edit });
   }
 
@@ -1401,6 +1619,23 @@ async function replyMode(ctx, { edit = false } = {}) {
       idempotencyKey: `smart-bid:${projectId}:${Date.now()}`,
     });
     store.setState(projectId, 'ACTION_CREATED');
+    try {
+      store.upsertDraft({
+        oppId: projectId,
+        body: smart.text,
+        suggestedPrice: smart.price ?? row.budgetMin ?? null,
+        suggestedDays: smart.days ?? 7,
+        status: 'pending',
+      });
+      store.recordAction({
+        type: 'sent_to_approvals',
+        oppId: projectId,
+        note: 'بفرست تأییدها',
+        preview: row.title || null,
+      });
+    } catch {
+      /* ignore */
+    }
     if (wizard) wizard.clear(ctx.from?.id);
     if (result.denied) {
       await editOrReply(
@@ -1520,6 +1755,7 @@ async function replyMode(ctx, { edit = false } = {}) {
   }
 
   controlBridges.replyOpportunitiesHub = replyOpportunitiesHub;
+  controlBridges.replyOpportunityBook = replyOpportunityBook;
   controlBridges.replyOpportunityRules = replyOpportunityRules;
   controlBridges.replyScoringProfile = replyScoringProfile;
   controlBridges.doOpportunityScan = doOpportunityScan;
@@ -1684,6 +1920,55 @@ async function replyMode(ctx, { edit = false } = {}) {
       return;
     }
 
+    const bookCb = parseBookCallback(ctx.callbackQuery.data);
+    if (bookCb) {
+      await ctx.answerCallbackQuery();
+      if (bookCb.type === 'book_home') {
+        await replyOpportunityBook(ctx, { edit: true });
+        return;
+      }
+      if (bookCb.type === 'book_new') {
+        await replyBookSection(ctx, 'new', bookCb.page, { edit: true });
+        return;
+      }
+      if (bookCb.type === 'book_high') {
+        await replyBookSection(ctx, 'high', bookCb.page, { edit: true });
+        return;
+      }
+      if (bookCb.type === 'book_drafts') {
+        await replyBookSection(ctx, 'drafts', bookCb.page, { edit: true });
+        return;
+      }
+      if (bookCb.type === 'book_actions') {
+        await replyBookSection(ctx, 'actions', bookCb.page, { edit: true });
+        return;
+      }
+      if (bookCb.type === 'book_scans') {
+        await replyBookSection(ctx, 'scans', bookCb.page, { edit: true });
+        return;
+      }
+      if (bookCb.type === 'book_all') {
+        await replyBookSection(ctx, 'all', bookCb.page, { edit: true });
+        return;
+      }
+      if (bookCb.type === 'book_scan_run') {
+        await replyBookSection(ctx, 'scan_run', bookCb.page, {
+          edit: true,
+          scanId: bookCb.scanId,
+        });
+        return;
+      }
+      if (bookCb.type === 'book_opp') {
+        await replyBookOpp(ctx, bookCb.oppId, { edit: true });
+        return;
+      }
+      if (bookCb.type === 'book_draft_view') {
+        await replyBookDraft(ctx, bookCb.draftId, { edit: true });
+        return;
+      }
+      return;
+    }
+
     const oppCb = parseOpportunityCallback(ctx.callbackQuery.data);
     if (oppCb) {
       if (oppCb.type === 'opp_scan') {
@@ -1829,6 +2114,17 @@ async function replyMode(ctx, { edit = false } = {}) {
         const store = createOpportunityStore(db);
         const row = store.get(oppCb.projectId);
         store.setState(oppCb.projectId, 'IGNORED');
+        try {
+          store.recordAction({
+            type: 'ignored',
+            oppId: oppCb.projectId,
+            note: 'رد / نادیده از تلگرام',
+            preview: row?.title || null,
+          });
+          store.setDraftStatus(oppCb.projectId, 'rejected');
+        } catch {
+          /* ignore */
+        }
         if (row) {
           const fb = createFeedbackStore(db);
           fb.record('ignore', row.opportunity || row);
@@ -1844,6 +2140,17 @@ async function replyMode(ctx, { edit = false } = {}) {
         const store = createOpportunityStore(db);
         const row = store.get(oppCb.projectId);
         store.setState(oppCb.projectId, 'IGNORED');
+        try {
+          store.recordAction({
+            type: 'rejected',
+            oppId: oppCb.projectId,
+            note: 'رد با بازخورد',
+            preview: row?.title || null,
+          });
+          store.setDraftStatus(oppCb.projectId, 'rejected');
+        } catch {
+          /* ignore */
+        }
         if (row) {
           createFeedbackStore(db).record('reject', row.opportunity || row);
         }
