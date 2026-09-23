@@ -47,13 +47,14 @@ export function opportunityScanResultKeyboard(summary = {}) {
   const notified = Number(summary.notified ?? 0) || 0;
   const showBatch = matched > 0 || drafts > 0 || notified > 0;
   const kb = new InlineKeyboard()
+    .text('📚 کتاب فرصت‌ها', 'book:home')
     .text('🔥 فرصت‌ها', 'opp:list')
-    .text('✅ تأییدها', 'goto:approvals')
-    .row();
+    .row()
+    .text('✅ تأییدها', 'goto:approvals');
   if (showBatch) {
-    kb.text('📝 پیش‌نویس همهٔ منطبق', 'opp:prep_matched').row();
+    kb.row().text('📝 پیش‌نویس همهٔ منطبق', 'opp:prep_matched');
   }
-  kb.text('🏠 خانه', 'nav:home').text('⚙️ قوانین امتیاز', 'opp:profile');
+  kb.row().text('🏠 خانه', 'nav:home').text('⚙️ قوانین امتیاز', 'opp:profile');
   void approvals;
   return kb;
 }
@@ -119,12 +120,13 @@ export function opportunitiesListKeyboard(items = [], { page = 0 } = {}) {
     const label = `${it.score ?? '—'}｜${truncate(it.title || it.id, 28)}`;
     kb.text(label, `opp:view:${it.id}`).row();
   }
-  kb.text('🔍 اسکن فرصت‌ها', 'opp:scan')
+  kb.text('📚 کتاب فرصت‌ها', 'book:home')
+    .text('🔍 اسکن فرصت‌ها', 'opp:scan')
+    .row()
     .text('🔄 بروزرسانی', 'opp:list')
-    .row()
     .text('👤 پروفایل امتیاز', 'opp:profile')
-    .text('📜 قوانین فرصت', 'opp:rules')
     .row()
+    .text('📜 قوانین فرصت', 'opp:rules')
     .text('🏠 خانه', 'nav:home');
   void page;
   return kb;
@@ -207,7 +209,7 @@ export function formatOpportunitiesHub(opts = {}) {
     `⏱ آخرین اسکن: ${lastScanAt ? relativeFa(lastScanAt) : 'هنوز انجام نشده'}`,
     `⭐ امتیازدهی: ${scoringAvailable ? 'فعال' : 'نیاز به پیکربندی پروفایل'}`,
     '',
-    'از منوی اصلی «🔥 فرصت‌ها» هم می‌توانید برگردید.',
+    'از «📚 کتاب فرصت‌ها» آرشیو اسکن‌ها و پیش‌نویس‌ها را ببینید.',
     'اسکن پروژه‌های جدید را با دکمه زیر اجرا کنید.',
   ].join('\n');
 }

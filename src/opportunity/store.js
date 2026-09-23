@@ -29,8 +29,28 @@ export const DECISIONS = Object.freeze([
   'AUTO_EXECUTE',
 ]);
 
+export const BOOK_ACTION_TYPES = Object.freeze([
+  'notify',
+  'draft_prepared',
+  'sent_to_approvals',
+  'skipped',
+  'ignored',
+  'approved',
+  'rejected',
+  'analyzed',
+  'auto_enqueued',
+]);
+
+export const DRAFT_STATUSES = Object.freeze(['pending', 'approved', 'rejected', 'stale']);
+
 const SCORING_PROFILE_KEY = 'opportunity_scoring_profile';
 const SCAN_STATE_KEY_PREFIX = 'opportunity_scan_state';
+const BOOK_HIGH_SCORE_KEY = 'opportunity_book_high_score';
+const DEFAULT_HIGH_SCORE = 55;
+const DEFAULT_RETENTION_DAYS = 90;
+const DEFAULT_MAX_OPPS = 500;
+const DEFAULT_MAX_ACTIONS = 1000;
+const DEFAULT_MAX_SCAN_RUNS = 120;
 
 /**
  * @param {import('better-sqlite3').Database} db
@@ -91,7 +111,58 @@ CREATE TABLE IF NOT EXISTS opportunity_decisions (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_opp_dec_proj ON opportunity_decisions(tenant_id, project_id, created_at);
+
+CREATE TABLE IF NOT EXISTS opportunity_scan_runs (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  at TEXT NOT NULL,
+  examined INTEGER NOT NULL DEFAULT 0,
+  new_count INTEGER NOT NULL DEFAULT 0,
+  matched INTEGER NOT NULL DEFAULT 0,
+  drafted INTEGER NOT NULL DEFAULT 0,
+  notified INTEGER NOT NULL DEFAULT 0,
+  approvals INTEGER NOT NULL DEFAULT 0,
+  ignored INTEGER NOT NULL DEFAULT 0,
+  skipped INTEGER NOT NULL DEFAULT 0,
+  summary_json TEXT,
+  project_ids_json TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opp_scan_runs_at ON opportunity_scan_runs(tenant_id, at DESC);
+
+CREATE TABLE IF NOT EXISTS opportunity_actions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  type TEXT NOT NULL,
+  at TEXT NOT NULL,
+  opp_id TEXT,
+  scan_run_id TEXT,
+  note TEXT,
+  preview TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_opp_actions_at ON opportunity_actions(tenant_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_opp_actions_opp ON opportunity_actions(tenant_id, opp_id, at DESC);
+
+CREATE TABLE IF NOT EXISTS opportunity_drafts (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  opp_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  suggested_price REAL,
+  suggested_days INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_opp_drafts_opp ON opportunity_drafts(tenant_id, opp_id);
+CREATE INDEX IF NOT EXISTS idx_opp_drafts_status ON opportunity_drafts(tenant_id, status, updated_at DESC);
 `);
+  // Soft migrations for columns added after first ship
+  try {
+    db.exec(`ALTER TABLE opportunity_projects ADD COLUMN last_scan_at TEXT`);
+  } catch {
+    /* already exists */
+  }
 }
 
 /**
@@ -116,7 +187,7 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
         `UPDATE opportunity_projects SET
           source = ?, title = ?, description = ?, budget_min = ?, budget_max = ?,
           category = ?, skills_json = ?, client_json = ?, created_at_src = ?,
-          status = ?, payload_json = ?, last_seen_at = ?, updated_at = ?
+          status = ?, payload_json = ?, last_seen_at = ?, last_scan_at = ?, updated_at = ?
          WHERE id = ? AND tenant_id = ?`
       ).run(
         opp.source || 'search',
@@ -130,6 +201,7 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
         opp.createdAt,
         opp.status,
         payload,
+        now,
         now,
         now,
         opp.id,
@@ -146,8 +218,8 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
       `INSERT INTO opportunity_projects (
         id, tenant_id, source, title, description, budget_min, budget_max,
         category, skills_json, client_json, created_at_src, status, state,
-        payload_json, first_seen_at, last_seen_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        payload_json, first_seen_at, last_seen_at, last_scan_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       opp.id,
       tenantId,
@@ -163,6 +235,7 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
       opp.status,
       state,
       payload,
+      now,
       now,
       now,
       now
@@ -205,20 +278,70 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
     return row ? mapOppRow(row) : null;
   }
 
-  function list({ state = null, minScore = null, limit = 20, offset = 0 } = {}) {
+  function list({
+    state = null,
+    minScore = null,
+    limit = 20,
+    offset = 0,
+    orderBy = 'score',
+    firstSeenAfter = null,
+    excludeStates = null,
+  } = {}) {
     let sql = `SELECT * FROM opportunity_projects WHERE tenant_id = ?`;
     const params = [tenantId];
     if (state) {
       sql += ` AND state = ?`;
       params.push(state);
     }
+    if (Array.isArray(excludeStates) && excludeStates.length) {
+      sql += ` AND state NOT IN (${excludeStates.map(() => '?').join(',')})`;
+      params.push(...excludeStates);
+    }
     if (minScore != null) {
       sql += ` AND score >= ?`;
       params.push(Number(minScore));
     }
-    sql += ` ORDER BY COALESCE(score, 0) DESC, last_seen_at DESC LIMIT ? OFFSET ?`;
+    if (firstSeenAfter) {
+      sql += ` AND first_seen_at >= ?`;
+      params.push(String(firstSeenAfter));
+    }
+    if (orderBy === 'first_seen') {
+      sql += ` ORDER BY first_seen_at DESC`;
+    } else if (orderBy === 'last_seen') {
+      sql += ` ORDER BY last_seen_at DESC`;
+    } else {
+      sql += ` ORDER BY COALESCE(score, 0) DESC, last_seen_at DESC`;
+    }
+    sql += ` LIMIT ? OFFSET ?`;
     params.push(Math.min(100, Math.max(1, limit)), Math.max(0, offset));
     return db.prepare(sql).all(...params).map(mapOppRow);
+  }
+
+  function countOpportunities({
+    state = null,
+    minScore = null,
+    firstSeenAfter = null,
+    excludeStates = null,
+  } = {}) {
+    let sql = `SELECT COUNT(*) AS c FROM opportunity_projects WHERE tenant_id = ?`;
+    const params = [tenantId];
+    if (state) {
+      sql += ` AND state = ?`;
+      params.push(state);
+    }
+    if (Array.isArray(excludeStates) && excludeStates.length) {
+      sql += ` AND state NOT IN (${excludeStates.map(() => '?').join(',')})`;
+      params.push(...excludeStates);
+    }
+    if (minScore != null) {
+      sql += ` AND score >= ?`;
+      params.push(Number(minScore));
+    }
+    if (firstSeenAfter) {
+      sql += ` AND first_seen_at >= ?`;
+      params.push(String(firstSeenAfter));
+    }
+    return Number(db.prepare(sql).get(...params)?.c || 0);
   }
 
   function hasSubmittedOrAction(projectId) {
@@ -449,6 +572,362 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
     return next;
   }
 
+
+  function getHighScoreThreshold() {
+    try {
+      const row = db.prepare(`SELECT value FROM kv WHERE key = ?`).get(BOOK_HIGH_SCORE_KEY);
+      if (row?.value != null && row.value !== '') {
+        const n = Number(row.value);
+        if (Number.isFinite(n)) return n;
+      }
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_HIGH_SCORE;
+  }
+
+  function setHighScoreThreshold(n) {
+    const v = Math.min(100, Math.max(0, Number(n) || DEFAULT_HIGH_SCORE));
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    ).run(BOOK_HIGH_SCORE_KEY, String(v), now);
+    return v;
+  }
+
+  function recordScanRun(summary = {}) {
+    const id = crypto.randomUUID();
+    const now = summary.at || summary.scannedAt || new Date().toISOString();
+    const projectIds = Array.isArray(summary.projectIds)
+      ? summary.projectIds.map(String)
+      : (summary.decisions || []).map((d) => String(d?.opportunity?.id || d?.id || '')).filter(Boolean);
+    db.prepare(
+      `INSERT INTO opportunity_scan_runs (
+        id, tenant_id, at, examined, new_count, matched, drafted, notified,
+        approvals, ignored, skipped, summary_json, project_ids_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      tenantId,
+      now,
+      Number(summary.examined ?? summary.scanned ?? 0) || 0,
+      Number(summary.newCount ?? 0) || 0,
+      Number(summary.matched ?? 0) || 0,
+      Number(summary.drafted ?? summary.drafts ?? 0) || 0,
+      Number(summary.notified ?? 0) || 0,
+      Number(summary.approvals ?? 0) || 0,
+      Number(summary.ignored ?? 0) || 0,
+      summary.skipped ? 1 : 0,
+      JSON.stringify({
+        reason: summary.reason || null,
+        skipped: Boolean(summary.skipped),
+        errors: summary.errors || [],
+        autoExecuted: summary.autoExecuted || 0,
+        autoMock: summary.autoMock || 0,
+      }),
+      JSON.stringify(projectIds),
+      now
+    );
+    return { id, at: now, projectIds };
+  }
+
+  function listScanRuns({ limit = 20, offset = 0 } = {}) {
+    const rows = db
+      .prepare(
+        `SELECT * FROM opportunity_scan_runs WHERE tenant_id = ?
+         ORDER BY at DESC LIMIT ? OFFSET ?`
+      )
+      .all(tenantId, Math.min(100, Math.max(1, limit)), Math.max(0, offset));
+    return rows.map(mapScanRunRow);
+  }
+
+  function countScanRuns() {
+    return Number(
+      db.prepare(`SELECT COUNT(*) AS c FROM opportunity_scan_runs WHERE tenant_id = ?`).get(tenantId)?.c || 0
+    );
+  }
+
+  function getScanRun(id) {
+    const row = db
+      .prepare(`SELECT * FROM opportunity_scan_runs WHERE id = ? AND tenant_id = ?`)
+      .get(String(id), tenantId);
+    return row ? mapScanRunRow(row) : null;
+  }
+
+  function listOpportunitiesForScanRun(scanRunId, { limit = 20, offset = 0 } = {}) {
+    const run = getScanRun(scanRunId);
+    if (!run) return [];
+    const ids = run.projectIds || [];
+    if (!ids.length) return [];
+    const slice = ids.slice(Math.max(0, offset), Math.max(0, offset) + Math.min(50, Math.max(1, limit)));
+    const out = [];
+    for (const id of slice) {
+      const row = get(id);
+      if (row) out.push(row);
+    }
+    return out;
+  }
+
+  function recordAction({ type, oppId = null, scanRunId = null, note = null, preview = null, at = null }) {
+    const id = crypto.randomUUID();
+    const when = at || new Date().toISOString();
+    const previewText =
+      preview != null ? String(preview).slice(0, 800) : null;
+    db.prepare(
+      `INSERT INTO opportunity_actions (
+        id, tenant_id, type, at, opp_id, scan_run_id, note, preview
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      tenantId,
+      String(type || 'analyzed'),
+      when,
+      oppId != null ? String(oppId) : null,
+      scanRunId != null ? String(scanRunId) : null,
+      note != null ? String(note).slice(0, 400) : null,
+      previewText
+    );
+    return { id, at: when, type, oppId };
+  }
+
+  function listActions({ limit = 20, offset = 0, oppId = null, type = null } = {}) {
+    let sql = `SELECT * FROM opportunity_actions WHERE tenant_id = ?`;
+    const params = [tenantId];
+    if (oppId) {
+      sql += ` AND opp_id = ?`;
+      params.push(String(oppId));
+    }
+    if (type) {
+      sql += ` AND type = ?`;
+      params.push(String(type));
+    }
+    sql += ` ORDER BY at DESC LIMIT ? OFFSET ?`;
+    params.push(Math.min(100, Math.max(1, limit)), Math.max(0, offset));
+    return db.prepare(sql).all(...params).map(mapActionRow);
+  }
+
+  function countActions({ oppId = null, type = null } = {}) {
+    let sql = `SELECT COUNT(*) AS c FROM opportunity_actions WHERE tenant_id = ?`;
+    const params = [tenantId];
+    if (oppId) {
+      sql += ` AND opp_id = ?`;
+      params.push(String(oppId));
+    }
+    if (type) {
+      sql += ` AND type = ?`;
+      params.push(String(type));
+    }
+    return Number(db.prepare(sql).get(...params)?.c || 0);
+  }
+
+  function upsertDraft({
+    oppId,
+    body,
+    suggestedPrice = null,
+    suggestedDays = null,
+    status = 'pending',
+  }) {
+    if (!oppId) throw new Error('draft_opp_id_required');
+    const now = new Date().toISOString();
+    const existing = db
+      .prepare(`SELECT id FROM opportunity_drafts WHERE tenant_id = ? AND opp_id = ?`)
+      .get(tenantId, String(oppId));
+    const st = DRAFT_STATUSES.includes(status) ? status : 'pending';
+    const textBody = String(body || '').slice(0, 8000);
+    if (existing) {
+      db.prepare(
+        `UPDATE opportunity_drafts SET
+          body = ?, suggested_price = ?, suggested_days = ?, status = ?, updated_at = ?
+         WHERE id = ? AND tenant_id = ?`
+      ).run(
+        textBody,
+        suggestedPrice,
+        suggestedDays,
+        st,
+        now,
+        existing.id,
+        tenantId
+      );
+      return getDraftByOpp(oppId);
+    }
+    const id = crypto.randomUUID();
+    db.prepare(
+      `INSERT INTO opportunity_drafts (
+        id, tenant_id, opp_id, body, suggested_price, suggested_days, created_at, updated_at, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, tenantId, String(oppId), textBody, suggestedPrice, suggestedDays, now, now, st);
+    return getDraftByOpp(oppId);
+  }
+
+  function getDraftByOpp(oppId) {
+    const row = db
+      .prepare(`SELECT * FROM opportunity_drafts WHERE tenant_id = ? AND opp_id = ?`)
+      .get(tenantId, String(oppId));
+    return row ? mapDraftRow(row) : null;
+  }
+
+  function getDraft(id) {
+    const row = db
+      .prepare(`SELECT * FROM opportunity_drafts WHERE id = ? AND tenant_id = ?`)
+      .get(String(id), tenantId);
+    return row ? mapDraftRow(row) : null;
+  }
+
+  function setDraftStatus(oppId, status) {
+    const st = DRAFT_STATUSES.includes(status) ? status : 'pending';
+    const now = new Date().toISOString();
+    db.prepare(
+      `UPDATE opportunity_drafts SET status = ?, updated_at = ? WHERE tenant_id = ? AND opp_id = ?`
+    ).run(st, now, tenantId, String(oppId));
+    return getDraftByOpp(oppId);
+  }
+
+  function listDrafts({ status = 'pending', limit = 20, offset = 0 } = {}) {
+    let sql = `SELECT * FROM opportunity_drafts WHERE tenant_id = ?`;
+    const params = [tenantId];
+    if (status) {
+      sql += ` AND status = ?`;
+      params.push(String(status));
+    }
+    sql += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    params.push(Math.min(100, Math.max(1, limit)), Math.max(0, offset));
+    return db.prepare(sql).all(...params).map(mapDraftRow);
+  }
+
+  function countDrafts({ status = 'pending' } = {}) {
+    let sql = `SELECT COUNT(*) AS c FROM opportunity_drafts WHERE tenant_id = ?`;
+    const params = [tenantId];
+    if (status) {
+      sql += ` AND status = ?`;
+      params.push(String(status));
+    }
+    return Number(db.prepare(sql).get(...params)?.c || 0);
+  }
+
+  function listNewOpportunities({ withinHours = 48, limit = 20, offset = 0 } = {}) {
+    const since = new Date(Date.now() - Math.max(1, withinHours) * 3600_000).toISOString();
+    return list({
+      firstSeenAfter: since,
+      orderBy: 'first_seen',
+      limit,
+      offset,
+      excludeStates: ['IGNORED'],
+    });
+  }
+
+  function countNewOpportunities({ withinHours = 48 } = {}) {
+    const since = new Date(Date.now() - Math.max(1, withinHours) * 3600_000).toISOString();
+    return countOpportunities({
+      firstSeenAfter: since,
+      excludeStates: ['IGNORED'],
+    });
+  }
+
+  function listHighScore({ minScore = null, limit = 20, offset = 0 } = {}) {
+    const threshold = minScore != null ? Number(minScore) : getHighScoreThreshold();
+    return list({
+      minScore: threshold,
+      orderBy: 'score',
+      limit,
+      offset,
+      excludeStates: ['IGNORED'],
+    });
+  }
+
+  function countHighScore({ minScore = null } = {}) {
+    const threshold = minScore != null ? Number(minScore) : getHighScoreThreshold();
+    return countOpportunities({
+      minScore: threshold,
+      excludeStates: ['IGNORED'],
+    });
+  }
+
+  /**
+   * Retention: drop old opportunities / scan runs / actions / stale drafts.
+   * Defaults: 90 days or max 500 opps, 120 scan runs, 1000 actions.
+   */
+  function pruneBook({
+    retentionDays = DEFAULT_RETENTION_DAYS,
+    maxOpps = DEFAULT_MAX_OPPS,
+    maxActions = DEFAULT_MAX_ACTIONS,
+    maxScanRuns = DEFAULT_MAX_SCAN_RUNS,
+  } = {}) {
+    const cutoff = new Date(Date.now() - Math.max(7, retentionDays) * 86400_000).toISOString();
+    let pruned = { opps: 0, actions: 0, scans: 0, drafts: 0 };
+
+    const oldOpps = db
+      .prepare(
+        `DELETE FROM opportunity_projects WHERE tenant_id = ? AND last_seen_at < ?
+         AND state IN ('IGNORED', 'ANALYZED')`
+      )
+      .run(tenantId, cutoff);
+    pruned.opps += oldOpps.changes || 0;
+
+    const count = countOpportunities();
+    if (count > maxOpps) {
+      const excess = count - maxOpps;
+      const victims = db
+        .prepare(
+          `SELECT id FROM opportunity_projects WHERE tenant_id = ?
+           ORDER BY last_seen_at ASC LIMIT ?`
+        )
+        .all(tenantId, excess);
+      const del = db.prepare(`DELETE FROM opportunity_projects WHERE id = ? AND tenant_id = ?`);
+      for (const v of victims) {
+        pruned.opps += del.run(v.id, tenantId).changes || 0;
+      }
+    }
+
+    const oldActs = db
+      .prepare(`DELETE FROM opportunity_actions WHERE tenant_id = ? AND at < ?`)
+      .run(tenantId, cutoff);
+    pruned.actions += oldActs.changes || 0;
+    const actCount = countActions();
+    if (actCount > maxActions) {
+      const excess = actCount - maxActions;
+      db.prepare(
+        `DELETE FROM opportunity_actions WHERE id IN (
+          SELECT id FROM opportunity_actions WHERE tenant_id = ?
+          ORDER BY at ASC LIMIT ?
+        )`
+      ).run(tenantId, excess);
+      pruned.actions += excess;
+    }
+
+    const oldScans = db
+      .prepare(`DELETE FROM opportunity_scan_runs WHERE tenant_id = ? AND at < ?`)
+      .run(tenantId, cutoff);
+    pruned.scans += oldScans.changes || 0;
+    const scanCount = countScanRuns();
+    if (scanCount > maxScanRuns) {
+      const excess = scanCount - maxScanRuns;
+      db.prepare(
+        `DELETE FROM opportunity_scan_runs WHERE id IN (
+          SELECT id FROM opportunity_scan_runs WHERE tenant_id = ?
+          ORDER BY at ASC LIMIT ?
+        )`
+      ).run(tenantId, excess);
+      pruned.scans += excess;
+    }
+
+    const staleDrafts = db
+      .prepare(
+        `UPDATE opportunity_drafts SET status = 'stale', updated_at = ?
+         WHERE tenant_id = ? AND status = 'pending' AND updated_at < ?`
+      )
+      .run(new Date().toISOString(), tenantId, cutoff);
+    pruned.drafts += staleDrafts.changes || 0;
+    const oldDrafts = db
+      .prepare(
+        `DELETE FROM opportunity_drafts WHERE tenant_id = ? AND status IN ('stale','rejected') AND updated_at < ?`
+      )
+      .run(tenantId, cutoff);
+    pruned.drafts += oldDrafts.changes || 0;
+
+    return pruned;
+  }
+
   return {
     tenantId,
     upsertOpportunity,
@@ -456,6 +935,7 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
     setState,
     get,
     list,
+    countOpportunities,
     listOpportunities: (opts) => list(opts),
     getOpportunity: (id) => get(id),
     hasSubmittedOrAction,
@@ -471,6 +951,27 @@ export function createOpportunityStore(db, { tenantId = 'default' } = {}) {
     setScoringProfile,
     getScanState,
     setScanState,
+    getHighScoreThreshold,
+    setHighScoreThreshold,
+    recordScanRun,
+    listScanRuns,
+    countScanRuns,
+    getScanRun,
+    listOpportunitiesForScanRun,
+    recordAction,
+    listActions,
+    countActions,
+    upsertDraft,
+    getDraft,
+    getDraftByOpp,
+    setDraftStatus,
+    listDrafts,
+    countDrafts,
+    listNewOpportunities,
+    countNewOpportunities,
+    listHighScore,
+    countHighScore,
+    pruneBook,
   };
 }
 
@@ -516,7 +1017,54 @@ function mapOppRow(r) {
     opportunity: safeJson(r.payload_json, null),
     firstSeenAt: r.first_seen_at,
     lastSeenAt: r.last_seen_at,
+    lastScanAt: r.last_scan_at || null,
     updatedAt: r.updated_at,
+  };
+}
+
+function mapScanRunRow(r) {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    at: r.at,
+    examined: r.examined,
+    newCount: r.new_count,
+    matched: r.matched,
+    drafted: r.drafted,
+    notified: r.notified,
+    approvals: r.approvals,
+    ignored: r.ignored,
+    skipped: Boolean(r.skipped),
+    summary: safeJson(r.summary_json, {}),
+    projectIds: safeJson(r.project_ids_json, []),
+    createdAt: r.created_at,
+  };
+}
+
+function mapActionRow(r) {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    type: r.type,
+    at: r.at,
+    oppId: r.opp_id,
+    scanRunId: r.scan_run_id,
+    note: r.note,
+    preview: r.preview,
+  };
+}
+
+function mapDraftRow(r) {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    oppId: r.opp_id,
+    body: r.body,
+    suggestedPrice: r.suggested_price,
+    suggestedDays: r.suggested_days,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    status: r.status,
   };
 }
 

@@ -14,7 +14,7 @@ Owner-only remote control for Eyes / Brain / Hands — daily ops without Cursor/
 |---------|------|
 | 🖥 سیستم | Health, mode, live-auto flag, Bale status, MCP host/port (no secrets), contract count, owner ids |
 | 👁 خواندن داده | Dashboard, profile (sanitized), chats, notifications, bookmarks, plans, project search wizard, SEO meta (path hint only) |
-| 🧠 مغز | Opportunities hub, scoring profile, rules, opportunity scan, decision history, decision inbox |
+| 🧠 مغز | Opportunities hub, **📚 کتاب فرصت‌ها** archive, scoring profile, rules, opportunity scan, decision history, decision inbox |
 | 🖐 عملیات | Approvals, mode, toggles, **ALLOW_LIVE_AUTO_BID** (confirm + warning), daily limits, blacklist, emergency stop |
 | 🔐 امنیت | Session health, token age, renew (browser token preferred), owner ids |
 | 🔔 اعلان‌ها | Morning digest send-now, multi-owner note, Bale configured/not + set token (deleteMessage, never echo) |

@@ -19,9 +19,10 @@ test('NOTIFY-tier cards still get actionable HITL buttons', () => {
   assert.ok(!labels.some((t) => /ارسال زنده|live/i.test(t)));
 });
 
-test('scan result keyboard offers list, approvals, batch prep, home, scoring rules', () => {
+test('scan result keyboard offers book, list, approvals, batch prep, home, scoring rules', () => {
   const empty = opportunityScanResultKeyboard({ matched: 0, notified: 0, drafts: 0 });
   const emptyData = empty.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(emptyData.includes('book:home'));
   assert.ok(emptyData.includes('opp:list'));
   assert.ok(emptyData.includes('goto:approvals'));
   assert.ok(!emptyData.includes('opp:prep_matched'), 'hide batch when nothing to prep');
@@ -29,6 +30,7 @@ test('scan result keyboard offers list, approvals, batch prep, home, scoring rul
   const full = opportunityScanResultKeyboard({ matched: 0, notified: 5, drafts: 0 });
   const fullData = full.inline_keyboard.flat().map((b) => b.callback_data);
   assert.ok(fullData.includes('opp:prep_matched'));
+  assert.ok(fullData.includes('book:home'));
   assert.equal(parseOpportunityCallback('opp:prep_matched').type, 'opp_prep_matched');
   assert.ok(OPP_BATCH_PREP_CAP >= 1 && OPP_BATCH_PREP_CAP <= 10);
 });
