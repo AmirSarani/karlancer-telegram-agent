@@ -1872,54 +1872,8 @@ async function replyMode(ctx, { edit = false } = {}) {
       if (await control.handleCallback(ctx, cpParsed)) return;
     }
 
-    const parsed = parseCallbackData(ctx.callbackQuery.data);
-    if (!parsed) {
-      await ctx.answerCallbackQuery({ text: 'دکمه نامعتبر' });
-      return;
-    }
-
-    if (parsed.type === 'refresh_status' || parsed.type === 'nav_dash') {
-      await ctx.answerCallbackQuery({ text: 'داشبورد…' });
-      await replyStatus(ctx, { edit: true });
-      return;
-    }
-
-    if (parsed.type === 'dash_details') {
-      await ctx.answerCallbackQuery({ text: 'جزئیات…' });
-      await replySystemDetails(ctx, { edit: true });
-      return;
-    }
-
-    if (parsed.type === 'nav_home') {
-      await ctx.answerCallbackQuery();
-      await replyHome(ctx, { edit: true });
-      return;
-    }
-
-    if (parsed.type === 'nav_settings') {
-      await ctx.answerCallbackQuery();
-      await replySettings(ctx, { edit: true });
-      return;
-    }
-
-    if (parsed.type === 'nav_mode') {
-      await ctx.answerCallbackQuery();
-      await replyMode(ctx, { edit: true });
-      return;
-    }
-
-    if (parsed.type === 'opp_hub') {
-      await ctx.answerCallbackQuery();
-      await replyOpportunitiesHub(ctx, { edit: true });
-      return;
-    }
-
-    if (parsed.type === 'goto_inbox' || parsed.type === 'inbox_refresh') {
-      await ctx.answerCallbackQuery();
-      await replyDecisionInbox(ctx, { edit: true });
-      return;
-    }
-
+    // book: / opp: must be handled before parseCallbackData null-reject
+    // (parseCallbackData does not know those prefixes — otherwise toast «دکمه نامعتبر»).
     const bookCb = parseBookCallback(ctx.callbackQuery.data);
     if (bookCb) {
       await ctx.answerCallbackQuery();
@@ -2189,6 +2143,55 @@ async function replyMode(ctx, { edit = false } = {}) {
         await prepMatchedOpportunities(ctx);
         return;
       }
+    }
+
+
+    const parsed = parseCallbackData(ctx.callbackQuery.data);
+    if (!parsed) {
+      await ctx.answerCallbackQuery({ text: 'دکمه نامعتبر' });
+      return;
+    }
+
+    if (parsed.type === 'refresh_status' || parsed.type === 'nav_dash') {
+      await ctx.answerCallbackQuery({ text: 'داشبورد…' });
+      await replyStatus(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'dash_details') {
+      await ctx.answerCallbackQuery({ text: 'جزئیات…' });
+      await replySystemDetails(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_home') {
+      await ctx.answerCallbackQuery();
+      await replyHome(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_settings') {
+      await ctx.answerCallbackQuery();
+      await replySettings(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'nav_mode') {
+      await ctx.answerCallbackQuery();
+      await replyMode(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'opp_hub') {
+      await ctx.answerCallbackQuery();
+      await replyOpportunitiesHub(ctx, { edit: true });
+      return;
+    }
+
+    if (parsed.type === 'goto_inbox' || parsed.type === 'inbox_refresh') {
+      await ctx.answerCallbackQuery();
+      await replyDecisionInbox(ctx, { edit: true });
+      return;
     }
 
     if (parsed.type === 'nav_rules') {

@@ -10,6 +10,8 @@ import {
 } from '../../src/opportunity/store.js';
 import { createOpportunityScanner } from '../../src/opportunity/scanner.js';
 import { toProjectOpportunity } from '../../src/opportunity/normalize.js';
+import { parseCallbackData, settingsInlineKeyboard } from '../../src/telegram/ui.js';
+import { brainMenuKeyboard } from '../../src/telegram/control-panel.js';
 import {
   parseBookCallback,
   formatBookHome,
@@ -23,7 +25,10 @@ import {
   bookOppDetailKeyboard,
   BOOK_PAGE_SIZE,
 } from '../../src/telegram/opportunity-book.js';
-import { opportunityScanResultKeyboard } from '../../src/telegram/opportunity-ux.js';
+import {
+  opportunityScanResultKeyboard,
+  opportunitiesListKeyboard,
+} from '../../src/telegram/opportunity-ux.js';
 
 function tmpDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opp-book-'));
@@ -264,4 +269,39 @@ test('formatBookOppDetail reuses readable notify style', () => {
   });
   assert.ok(/فرصت/.test(text));
   assert.ok(/۶۶|66/.test(text));
+});
+
+test('callback router: book:home must not be toast دکمه نامعتبر', () => {
+  // Regression: PR #7 wired parseBookCallback AFTER parseCallbackData null-reject,
+  // so keyboards emitting book:home showed «دکمه نامعتبر». Dispatch order must be:
+  // parseBookCallback → parseOpportunityCallback → parseCallbackData → invalid toast.
+  const data = 'book:home';
+  assert.equal(parseCallbackData(data), null, 'parseCallbackData must not own book:*');
+  const book = parseBookCallback(data);
+  assert.ok(book);
+  assert.equal(book.type, 'book_home');
+
+  function route(cb) {
+    const bookCb = parseBookCallback(cb);
+    if (bookCb) return { handler: 'book', type: bookCb.type };
+    const parsed = parseCallbackData(cb);
+    if (!parsed) return { handler: 'invalid', toast: 'دکمه نامعتبر' };
+    return { handler: 'ui', type: parsed.type };
+  }
+  const hit = route('book:home');
+  assert.equal(hit.handler, 'book');
+  assert.equal(hit.type, 'book_home');
+  assert.equal(hit.toast, undefined);
+
+  const sources = [
+    opportunityScanResultKeyboard({ matched: 1, notified: 1, drafts: 0 }),
+    opportunitiesListKeyboard([]),
+    settingsInlineKeyboard('running'),
+    brainMenuKeyboard(),
+  ];
+  for (const kb of sources) {
+    const flat = kb.inline_keyboard.flat().map((b) => b.callback_data);
+    assert.ok(flat.includes('book:home'), 'keyboard must emit book:home');
+    for (const d of flat) assert.ok(String(d).length <= 64);
+  }
 });
