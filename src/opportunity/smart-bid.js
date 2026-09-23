@@ -1,6 +1,7 @@
 /**
- * Smart Bid — human Persian bid text + suggested price/timeline from opportunity + scoring profile.
+ * Smart Bid: human Persian bid text + suggested price/timeline from opportunity + scoring profile.
  * Deterministic template + cleanHumanReply; no robotic dumps; no live submit here.
+ * Tone follows PERSIAN_WRITING_RULES in src/agent/prompts.js (formal-but-human; no LLM prompt here).
  */
 import { cleanHumanReply } from '../agent/reply-clean.js';
 
