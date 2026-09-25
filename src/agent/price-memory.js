@@ -13,6 +13,8 @@ export const LEARN_MAX_SPREAD = 0.35;
 export const SIMILARITY_MIN = 0.5;
 const MAX_AMOUNT = 100_000_000_000; // 100B Toman sanity cap
 const MIN_AMOUNT = 100_000;
+/** Learning sanity cap: a single freelance job price above this is almost surely a typo / wrong unit. */
+const LEARN_MAX_AMOUNT = 2_000_000_000;
 
 /** Canonical tag → trigger words (Persian + English). */
 const TAGS = Object.freeze({
@@ -163,7 +165,7 @@ export function recordPriceSample(
   { amount, source, features, roomId = null, projectId = null, extId = null, won = null, title = null }
 ) {
   const n = Math.round(Number(amount));
-  if (!db || !Number.isFinite(n) || n < MIN_AMOUNT || n > MAX_AMOUNT) return { ok: false, reason: 'invalid_amount' };
+  if (!db || !Number.isFinite(n) || n < MIN_AMOUNT || n > LEARN_MAX_AMOUNT) return { ok: false, reason: 'invalid_amount' };
   ensureTable(db);
   if (extId != null) {
     const hit = db.prepare(`SELECT id FROM price_samples WHERE ext_id = ?`).get(String(extId));
@@ -298,14 +300,24 @@ export function parseTomanAmount(text) {
  * Amount mentioned as a price in a sent chat message (needs a currency / scale word nearby).
  */
 export function extractSentPrice(text) {
-  const t = toLatinDigits(String(text || ''));
-  const isRial = /ریال|rial|irr/i.test(t) && !/تومان|تومن|toman/i.test(t);
-  if (!/تومان|تومن|میلیون|هزار|ریال|toman|rial|million/i.test(t)) return null;
-  const norm = t.replace(/(\d+(?:\.\d+)?)\s*(?:million|m)\b/gi, '$1 میلیون');
-  const v = parseTomanAmount(norm);
-  if (v == null) return null;
-  // Karlancer amounts are Toman; a Rial figure is 10× larger.
-  return isRial ? Math.round(v / 10) : v;
+  // Only numbers written WITH a unit count (card / phone numbers and ids never do).
+  const t = toLatinDigits(String(text || '')).replace(/٫/g, '.').replace(/[٬،]/g, ',');
+  const re = /(\d[\d,]*(?:\.\d+)?)\s*(میلیارد|میلیون|هزار|تومان|تومن|ریال|million|toman|rial|irr|m\b)(\s*(?:تومان|تومن|ریال|toman|rial))?/gi;
+  let best = null;
+  let m;
+  while ((m = re.exec(t))) {
+    const digits = m[1].replace(/,/g, '');
+    if (!m[1].includes(',') && digits.replace(/\..*/, '').length >= 10) continue; // phone / card
+    const num = Number(digits);
+    if (!Number.isFinite(num) || num <= 0) continue;
+    const unit = m[2].toLowerCase();
+    const mult = unit === 'میلیارد' ? 1e9 : unit === 'میلیون' || unit === 'million' || unit === 'm' ? 1e6 : unit === 'هزار' ? 1e3 : 1;
+    const isRial = /ریال|rial|irr/i.test(`${m[2]} ${m[3] || ''}`);
+    // Karlancer amounts are Toman; a Rial figure is 10× larger.
+    const v = Math.round((num * mult) / (isRial ? 10 : 1));
+    if (v >= MIN_AMOUNT && v <= LEARN_MAX_AMOUNT && (best == null || v > best)) best = v;
+  }
+  return best;
 }
 
 // —— per-room owner answer / pending ask (kv) ——

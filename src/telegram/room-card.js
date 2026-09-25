@@ -875,3 +875,26 @@ export default {
   extractProposalHints,
   ROOMS_PAGE_SIZE,
 };
+
+/**
+ * Item 4: the merged price card after the owner set/accepted a price. Same message is edited.
+ */
+export function formatResumedPriceCard(card = {}) {
+  const amount = card.suggestedPrice ?? card.priceAsk?.suggested ?? null;
+  const priceFa = card.suggestedPriceFa || (amount ? `${fmtNum(amount)} تومان` : null);
+  if (card.continuumAction === 'auto_sent') {
+    return [
+      `✅ قیمت ${priceFa || 'تعیین‌شده'} ثبت شد و پاسخ با همین قیمت ارسال شد.`,
+      card.project?.title ? `• ${String(card.project.title).slice(0, 120)}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  const { priceAsk, ...rest } = card;
+  void priceAsk;
+  return [
+    `✅ قیمت ${priceFa || 'تعیین‌شده'} ثبت شد. پیش‌نویس نهایی با همین قیمت آماده است و بدون تأیید شما ارسال نمی‌شود.`,
+    '',
+    formatRoomCard({ ...rest, suggestedPriceFa: priceFa }),
+  ].join('\n');
+}

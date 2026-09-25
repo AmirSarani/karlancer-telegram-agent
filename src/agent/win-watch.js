@@ -1,17 +1,22 @@
 /**
  * Phase D — scheduled win detection (~every 10 min).
  *
- * Sources: notifications (win phrases) + status of projects we bid on (assigned freelancer == us).
+ * Sources: notifications (win phrases) + status of our own bids (GET /api/bids: a bid that moved past
+ * pending/declined, e.g. accepted / in progress / completed, is a win). Karlancer does not expose the
+ * assigned freelancer on projects (freelancer_id is always null), so the old project check is only a
+ * fallback if that field ever appears.
  * Dedupe in kv, persist post-win state, prepare the first client message as an owner approval
  * (always HITL: mutation requester with forceRequireApproval → «تأییدها»). Never auto-sends.
  */
 import { scanNotificationsForWins, advancePostWin, createPostWinState } from '../opportunity/post-win.js';
 import { getOwnUserId } from './own-identity.js';
+import { isWonBidStatus } from './price-crawl.js';
 import { logger } from '../observability/logger.js';
 
 const SEEN_KEY = 'postwin:seen';
 const LATEST_KEY = 'postwin:latest';
 const CURSOR_KEY = 'postwin:project_cursor';
+const BIDS_BASELINE_KEY = 'postwin:bids_baseline';
 const BASELINE_WINDOW_MS = 24 * 3_600_000;
 const BID_LOOKBACK_MS = 30 * 86_400_000;
 
@@ -68,7 +73,7 @@ export function recentBidProjectIds(db, { now = Date.now(), limit = 50 } = {}) {
  * @returns {Promise<{ ok: boolean, wins: object[], checked: { notifications: number, projects: number }, baseline?: boolean }>}
  */
 export async function runWinWatch(deps) {
-  const { db, api, roomState = null, mutations = null, now = Date.now(), maxProjectChecks = 5 } = deps;
+  const { db, api, roomState = null, mutations = null, now = Date.now(), maxProjectChecks = 5, maxBidPages = 2 } = deps;
   const seenState = kvRead(db, SEEN_KEY);
   const baseline = !seenState;
   const seen = new Set(Array.isArray(seenState?.keys) ? seenState.keys : []);
@@ -103,7 +108,41 @@ export async function runWinWatch(deps) {
     }
   }
 
-  // 2) Status of projects we bid on (rotating, a few per run)
+  // 2) Our bids' status (first pages = most recent). First run seeds a baseline without notifying,
+  //    so old completed jobs are never announced as new wins.
+  if (api?.bids?.listMine) {
+    const bidsBaseline = !kvRead(db, BIDS_BASELINE_KEY);
+    checked.bids = 0;
+    for (let page = 1; page <= maxBidPages; page += 1) {
+      let res;
+      try {
+        res = await api.bids.listMine({ page });
+      } catch (e) {
+        logger.warn('win_watch_bids_failed', { page, code: e.code, status: e.status });
+        break;
+      }
+      for (const b of res.bids || []) {
+        checked.bids += 1;
+        if (!b?.id || !isWonBidStatus(b.status)) continue;
+        const key = `b:${b.id}`;
+        if (seen.has(key) || (b.projectId && seen.has(`p:${b.projectId}`))) continue;
+        candidates.push({
+          key,
+          notify: !bidsBaseline,
+          source: 'bid_status',
+          projectId: b.projectId || null,
+          roomId: null,
+          title: b.project?.title || null,
+          reasons: [`bid_${String(b.status).replace(/\s+/g, '_')}`],
+        });
+      }
+      const last = Number(res.pagination?.lastPage) || page;
+      if (page >= last) break;
+    }
+    if (bidsBaseline) kvWrite(db, BIDS_BASELINE_KEY, { at: new Date(now).toISOString() });
+  }
+
+  // 3) Fallback: assigned freelancer on projects we bid on (only if Karlancer ever exposes it)
   if (api?.projects?.get) {
     const ids = recentBidProjectIds(db, { now }).filter((id) => !seen.has(`p:${id}`));
     if (ids.length) {

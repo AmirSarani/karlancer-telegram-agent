@@ -26,12 +26,14 @@ export async function notifyOwner({ token, chatId, text, reply_markup } = {}) {
     const bot = new Bot(String(token));
     // Long text → sequential messages; buttons only on the last part.
     const parts = splitTelegramText(safeText);
+    const messageIds = [];
     for (let i = 0; i < parts.length; i++) {
       const opts = {};
       if (reply_markup && i === parts.length - 1) opts.reply_markup = reply_markup;
-      await bot.api.sendMessage(Number(chatId) || chatId, parts[i], opts);
+      const m = await bot.api.sendMessage(Number(chatId) || chatId, parts[i], opts);
+      if (m?.message_id != null) messageIds.push(m.message_id);
     }
-    return { ok: true, parts: parts.length };
+    return { ok: true, parts: parts.length, messageIds };
   } catch (e) {
     return { ok: false, error: redactString(String(e?.message || e)).slice(0, 200) };
   }
@@ -55,15 +57,62 @@ export async function notifyAllOwners({ token, chatIds, text, reply_markup } = {
   let failed = 0;
   /** @type {string[]} */
   const errors = [];
+  /** @type {{ chatId: number|string, messageIds: number[] }[]} */
+  const deliveries = [];
   for (const chatId of ids) {
     const res = await notifyOwner({ token, chatId, text, reply_markup });
-    if (res.ok) sent += 1;
+    if (res.ok) {
+      sent += 1;
+      deliveries.push({ chatId, messageIds: res.messageIds || [] });
+    }
     else {
       failed += 1;
       if (res.error) errors.push(res.error);
     }
   }
-  return { ok: sent > 0, sent, failed, errors };
+  return { ok: sent > 0, sent, failed, errors, deliveries };
+}
+
+/**
+ * Replace a previously sent (possibly multi-part) owner message in place: edit each old part, send
+ * extra parts, delete surplus old parts. Buttons go on the last part.
+ * @returns {Promise<{ ok: boolean, messageIds?: number[], error?: string }>}
+ */
+export async function replaceOwnerMessages({ token, chatId, messageIds = [], text, reply_markup } = {}) {
+  if (!token || chatId == null || chatId === '' || !messageIds.length) return { ok: false, error: 'missing_config' };
+  const safeText = redactString(String(text || ''));
+  if (!safeText.trim()) return { ok: false, error: 'empty_text' };
+  const cid = Number(chatId) || chatId;
+  try {
+    const bot = new Bot(String(token));
+    const parts = splitTelegramText(safeText);
+    const out = [];
+    for (let i = 0; i < parts.length; i++) {
+      const opts = {};
+      if (reply_markup && i === parts.length - 1) opts.reply_markup = reply_markup;
+      if (i < messageIds.length) {
+        try {
+          await bot.api.editMessageText(cid, Number(messageIds[i]), parts[i], opts);
+        } catch (e) {
+          if (!/not modified/i.test(String(e?.message || ''))) throw e;
+        }
+        out.push(Number(messageIds[i]));
+      } else {
+        const m = await bot.api.sendMessage(cid, parts[i], opts);
+        if (m?.message_id != null) out.push(m.message_id);
+      }
+    }
+    for (let i = parts.length; i < messageIds.length; i++) {
+      try {
+        await bot.api.deleteMessage(cid, Number(messageIds[i]));
+      } catch {
+        /* old part may be gone already */
+      }
+    }
+    return { ok: true, messageIds: out };
+  } catch (e) {
+    return { ok: false, error: redactString(String(e?.message || e)).slice(0, 200) };
+  }
 }
 
 /**

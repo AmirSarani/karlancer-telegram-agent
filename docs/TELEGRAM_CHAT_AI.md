@@ -196,3 +196,31 @@ Modules: `src/agent/scan-prepare.js`, `src/worker/handlers.js` (`rooms.scan` / `
   or history the suggestion is the tier's own mid (by days), not a flat big-project price.
 - Discount cap is relative to the job's own price. The global price floor is optional (off by default)
   and only applies to jobs priced at or above it, so a ~1M Toman job is never rejected by it.
+
+## Item 4 — one merged price card (2026-09)
+
+- A price question together with a low-confidence draft is ONE card (`formatPriceAskCard`: project
+  context + price question + draft preview). Where it was delivered (every owner chat, all parts) is
+  kept in kv `pricecard:<roomId>` (`src/telegram/price-card-store.js`); the message the owner pressed
+  «✅ همین قیمت» / «✏️ مبلغ دیگر» on is added too.
+- After `chat.resume_price` the event `chat.price_resumed` edits those same messages
+  (`replaceOwnerMessages`: edit parts, send extra parts, delete surplus) into «✅ قیمت … ثبت شد» + the
+  final draft with approve buttons (still HITL). Auto-sent → a short «ارسال شد» line. Falls back to a
+  new card only if nothing could be edited.
+
+## Item 5 — owner replies on the website (2026-09)
+
+- `registerWebsiteReply` (messages poll): when the newest message in a room is ours (`sender_id` ==
+  own user id) and it is not the text the bot sent, the thread becomes `answered` with
+  `lastSentAt` = that message time (`answeredVia: 'website'`), so the 24h follow-up applies.
+
+## Item 6 — win detection by bid status (2026-09)
+
+- Verified live (read-only): project endpoints never expose the assigned freelancer
+  (`freelancer_id` always null). Our own bids (`GET /api/bids`) carry a status (pending / declined /
+  failed / completed …; public project detail also has `users_bid.status`).
+- `wins.scan` now reads bid pages 1–2: a bid whose status moved past pending/declined (accepted,
+  in progress, completed) is a win. First run seeds a baseline (kv `postwin:bids_baseline`) without
+  notifying. Notifications stay as the other source; the project-assignee check is only a fallback.
+- `rooms_scan_project_get_failed` (HTTP 400): `/api/publics/projects/<numericId>` answers 400 with
+  `{status:"redirect", data:"<slug>"}`; the adapter now follows it to the slug detail.

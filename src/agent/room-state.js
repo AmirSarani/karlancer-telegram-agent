@@ -243,6 +243,8 @@ export function createRoomState(db) {
         followUpCount: Number(v.followUpCount) || 0,
         lastFollowUpAt: v.lastFollowUpAt || null,
         followUpDraftedFor: v.followUpDraftedFor || null,
+        lastOwnMsgId: v.lastOwnMsgId || null,
+        answeredVia: v.answeredVia || null,
         updatedAt: v.updatedAt || row?.updatedAt || null,
       };
     },

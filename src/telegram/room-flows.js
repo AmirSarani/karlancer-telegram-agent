@@ -3,6 +3,7 @@
  * Sending is API-driven via VerifiedMutationContract — never LLM.
  */
 import crypto from 'node:crypto';
+import { addPriceCardMessage } from './price-card-store.js';
 import {
   extractPriceFeatures,
   getRoomPriceAnswer,
@@ -693,6 +694,15 @@ export function createRoomFlows(deps) {
       /* learning is best effort */
     }
     roomState.setThread(roomId, { suggestedPrice: amount });
+    // Item 4: the card the owner pressed on is the one that gets the final draft.
+    const cbMsg = ctx.callbackQuery?.message;
+    if (cbMsg?.message_id != null && cbMsg?.chat?.id != null) {
+      try {
+        addPriceCardMessage(db, roomId, cbMsg.chat.id, cbMsg.message_id);
+      } catch {
+        /* best effort */
+      }
+    }
     let queued = false;
     if (queue) {
       queue.create({
@@ -707,7 +717,7 @@ export function createRoomFlows(deps) {
       [
         `✅ قیمت ${formatTomanFa(amount)} ثبت شد.`,
         queued
-          ? 'پاسخ با همین قیمت آماده می‌شود؛ اگر قوانین خودکار اجازه بدهد ارسال می‌شود، وگرنه برای تأیید شما می‌آید.'
+          ? '⏳ پیش‌نویس نهایی با همین قیمت چند لحظه دیگر در همین کارت می‌آید؛ اگر قوانین خودکار اجازه بدهد ارسال می‌شود، وگرنه منتظر تأیید شما می‌ماند.'
           : 'از «📝 پیش‌نویس» پاسخ را با همین قیمت آماده کنید.',
         'این قیمت برای قیمت‌گذاری کارهای مشابه بعدی هم یاد گرفته شد.',
       ].join('\n'),
@@ -735,6 +745,14 @@ export function createRoomFlows(deps) {
 
   async function startPriceEntry(ctx, roomId) {
     roomState.setAwaitingPrice(ctx.from?.id, roomId);
+    const cbMsg = ctx.callbackQuery?.message;
+    if (cbMsg?.message_id != null && cbMsg?.chat?.id != null) {
+      try {
+        addPriceCardMessage(db, roomId, cbMsg.chat.id, cbMsg.message_id);
+      } catch {
+        /* best effort */
+      }
+    }
     await ctx.reply(
       'مبلغ را به تومان بفرستید؛ مثلاً «۲۵ میلیون» یا «۲۵۰۰۰۰۰۰».\nلغو: /cancel',
       menuOpts()

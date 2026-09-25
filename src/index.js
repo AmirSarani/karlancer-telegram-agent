@@ -12,7 +12,8 @@ import { createScheduler } from './worker/scheduler.js';
 import { createMorningDigest } from './opportunity/morning-digest.js';
 import { createLlmProvider, recordTokenUsage } from './llm/provider.js';
 import { TokenBudgetManager } from './intelligence/token-budget.js';
-import { notifyOwner, notifyAllOwners, editOwnerMessage } from './telegram/notify.js';
+import { notifyOwner, notifyAllOwners, editOwnerMessage, replaceOwnerMessages } from './telegram/notify.js';
+import { savePriceCardMessages, getPriceCardMessages, clearPriceCardMessages } from './telegram/price-card-store.js';
 import { notifyBaleOwners } from './telegram/bale-notify.js';
 import { createLiveAutoBidRef, createLiveAutoSendRef, readLiveAutoBidFlag, readLiveAutoSendFlag } from './telegram/live-auto-flag.js';
 import { createSessionHealthMonitor } from './security/session-health.js';
@@ -25,7 +26,7 @@ import {
   readLastScanNotifyFingerprint,
   writeLastScanNotifyFingerprint,
 } from './telegram/scan-notify-dedupe.js';
-import { formatRoomCard, roomCardKeyboard, roomPickKeyboard, roomPriceKeyboard } from './telegram/room-card.js';
+import { formatRoomCard, formatResumedPriceCard, roomCardKeyboard, roomPickKeyboard, roomPriceKeyboard } from './telegram/room-card.js';
 import { createRoomState } from './agent/room-state.js';
 import {
   formatMessageSentNotice,
@@ -277,6 +278,10 @@ async function main() {
         text,
         reply_markup: markup,
       });
+      if (res.ok && card.continuumAction === 'price_ask') {
+        // Item 4: remember this merged card so the final draft replaces it in place.
+        savePriceCardMessages(db, card.roomId, res.deliveries || []);
+      }
       if (!res.ok) {
         logger.warn('telegram_room_card_notify_failed', { roomId: card.roomId, error: res.errors?.[0] });
       } else {
@@ -412,14 +417,34 @@ async function main() {
         } else if (type === 'post_win.detected' && payload) {
           await notifyAllOwnersChannels(formatWinNotice(payload), APPROVALS_MARKUP);
         } else if (type === 'chat.price_resumed' && payload?.card) {
-          // Auto-sent → the message.sent notice follows; otherwise show the resulting card.
-          if (payload.card.continuumAction !== 'auto_sent' && config.enableTelegram && config.telegramBotToken) {
-            await notifyAllOwners({
-              token: config.telegramBotToken,
-              chatIds: config.telegramOwnerChatIds || [config.telegramOwnerChatId],
-              text: formatRoomCard(payload.card),
-              reply_markup: roomCardMarkup(payload.card),
-            });
+          // Item 4: edit the SAME price card into the final draft (or a short «sent» line when auto-sent).
+          if (config.enableTelegram && config.telegramBotToken) {
+            const card = payload.card;
+            const autoSent = card.continuumAction === 'auto_sent';
+            const text = formatResumedPriceCard(card);
+            const markup = autoSent ? roomCardKeyboard(card.roomId) : roomCardMarkup(card);
+            const targets = getPriceCardMessages(db, card.roomId);
+            let edited = 0;
+            for (const t of targets) {
+              const r = await replaceOwnerMessages({
+                token: config.telegramBotToken,
+                chatId: t.chatId,
+                messageIds: t.messageIds,
+                text,
+                reply_markup: markup,
+              });
+              if (r.ok) edited += 1;
+              else logger.warn('price_card_edit_failed', { roomId: card.roomId, err: r.error });
+            }
+            clearPriceCardMessages(db, card.roomId);
+            if (!edited && !autoSent) {
+              await notifyAllOwners({
+                token: config.telegramBotToken,
+                chatIds: config.telegramOwnerChatIds || [config.telegramOwnerChatId],
+                text,
+                reply_markup: markup,
+              });
+            }
           }
         } else if (type === 'pricing.crawled' && payload) {
           await notifyAllOwnersChannels(formatPriceCrawlNotice(payload));
