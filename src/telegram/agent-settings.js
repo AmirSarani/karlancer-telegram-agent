@@ -57,6 +57,13 @@ export function defaultAgentSettings() {
         scoringAvailable: false,
       },
     },
+    /** Chat pricing / negotiation limits (Toman). */
+    pricing: {
+      maxDiscountPct: 10,
+      priceFloorToman: null,
+    },
+    /** Minimum AI analysis confidence (0..1) for a chat reply to be auto-sent. */
+    autoMinConfidence: 0.6,
     /** Show Telegram approval card for first N auto actions each day */
     approvalPreviewFirstN: 3,
     autoShowCardWhenRiskMediumPlus: true,
@@ -116,6 +123,14 @@ export function normalizeAgentSettings(raw) {
     limits,
     blacklist,
     rules: { messageAuto, bidAuto },
+    pricing: {
+      maxDiscountPct: clampInt(raw.pricing?.maxDiscountPct, d.pricing.maxDiscountPct, 0, 50),
+      priceFloorToman:
+        raw.pricing?.priceFloorToman != null && Number(raw.pricing.priceFloorToman) > 0
+          ? Math.round(Number(raw.pricing.priceFloorToman))
+          : null,
+    },
+    autoMinConfidence: clampFloat(raw.autoMinConfidence, d.autoMinConfidence, 0, 1),
     approvalPreviewFirstN: clampInt(raw.approvalPreviewFirstN, d.approvalPreviewFirstN, 0, 50),
     autoShowCardWhenRiskMediumPlus: raw.autoShowCardWhenRiskMediumPlus !== false,
     updatedAt: raw.updatedAt || null,
@@ -126,6 +141,13 @@ function clampInt(v, fallback, min, max) {
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function clampFloat(v, fallback, min, max) {
+  if (v == null || v === '') return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
 function asStringList(v) {
@@ -170,6 +192,7 @@ export function createAgentSettingsStore(db, { tenantId = 'default' } = {}) {
       ...patch,
       toggles: { ...cur.toggles, ...(patch.toggles || {}) },
       limits: { ...cur.limits, ...(patch.limits || {}) },
+      pricing: { ...cur.pricing, ...(patch.pricing || {}) },
       blacklist: {
         rooms: patch.blacklist?.rooms ?? cur.blacklist.rooms,
         users: patch.blacklist?.users ?? cur.blacklist.users,

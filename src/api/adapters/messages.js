@@ -37,6 +37,8 @@ export function normalizeMessage(raw) {
     createdAt: m.createdAt,
     projectId: m.projectId,
     userId: m.userId,
+    senderId: m.senderId,
+    receptorId: m.receptorId,
     isOwn: m.isOwn,
     projectSlug: m.projectSlug,
     attachments: m.attachments,

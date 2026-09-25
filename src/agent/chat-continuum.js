@@ -12,6 +12,12 @@ import { analyzeRoomWithLlm, adaptDraftWithNote } from './analyze-llm.js';
 import { cleanHumanReply } from './reply-clean.js';
 import { buildDraftReply } from './draft-api.js';
 import { suggestChatPrice } from './chat-price.js';
+import {
+  buildConversationHistory,
+  latestClientTurn,
+  detectNegotiation,
+  evaluateDiscount,
+} from './conversation.js';
 import { createAgentSettingsStore } from '../telegram/agent-settings.js';
 import { logger } from '../observability/logger.js';
 
@@ -158,13 +164,15 @@ export function createChatContinuum(deps) {
       return { ...fallback, continuumAction: 'hitl_emergency', pickPrompt: true };
     }
 
-    const { analysis, draftText, llmUsed } = await runLlmPipeline(card, threadBefore, base.price, {
+    const pipe = await runLlmPipeline(card, threadBefore, base.price, {
       includePriceInDraft: true,
+      settings,
     });
+    const { analysis, draftText, llmUsed } = pipe;
     roomState.setDraft(base.roomId, {
       text: draftText,
       source: llmUsed ? 'llm_auto' : 'template_auto',
-      meta: { price: base.price },
+      meta: { price: base.price, fallback: pipe.fallback },
     });
     roomState.setThread(base.roomId, {
       lastDraftText: draftText,
@@ -174,21 +182,28 @@ export function createChatContinuum(deps) {
     });
 
     const liveOk = Boolean(getAllowLiveAutoSend());
+    const confidence = pipe.confidence;
     const gateCtx = {
       source: 'auto',
       roomId: base.roomId,
       text: draftText,
+      clientText: pipe.clientText,
       riskHint: 'high',
-      matchScore: analysis?.data?.matchScore,
+      matchScore: confidence != null ? Math.round(confidence * 100) : undefined,
+      confidence,
+      budget: card.project?.maxBudget ?? card.project?.minBudget ?? base.price?.amount ?? undefined,
     };
 
+    const safety = autoSafetyCheck(pipe, settings);
+
     let verdict = null;
-    if (gate) {
+    if (gate && !safety) {
       verdict = gate.check('messages.send', gateCtx);
     }
 
     const needsHitl =
       !liveOk ||
+      Boolean(safety) ||
       !mutations ||
       !verdict ||
       verdict.decision !== 'auto_allow' ||
@@ -199,7 +214,7 @@ export function createChatContinuum(deps) {
         status: 'pending',
         detail: !liveOk
           ? 'live_auto_send_off'
-          : verdict?.reason || 'require_approval',
+          : safety?.reason || verdict?.reason || 'require_approval',
       });
       const enriched = enrichCard(card, {
         ...base,
@@ -208,10 +223,15 @@ export function createChatContinuum(deps) {
         continuumAction: 'auto_hitl',
         pickPrompt: true,
         llmUsed,
-        gateVerdict: verdict
-          ? { decision: verdict.decision, reason: verdict.reason, reasonFa: verdict.reasonFa }
-          : null,
+        gateVerdict: safety
+          ? { decision: 'require_approval', reason: safety.reason, reasonFa: safety.reasonFa }
+          : verdict
+            ? { decision: verdict.decision, reason: verdict.reason, reasonFa: verdict.reasonFa }
+            : !liveOk
+              ? { decision: 'require_approval', reason: 'live_auto_send_off', reasonFa: 'ارسال خودکار زنده خاموش است' }
+              : null,
         liveAutoSend: liveOk,
+        negotiation: pipe.negotiation,
       });
       roomState.setCard(base.roomId, enriched);
       return enriched;
@@ -226,6 +246,7 @@ export function createChatContinuum(deps) {
           text: draftText,
           risk: 'high',
           aiReason: 'پاسخ خودکار چت (full_auto + gate)',
+          ...(card.clientUserId ? { receptorId: String(card.clientUserId) } : {}),
         },
         gateCtx: { ...gateCtx, source: 'auto' },
         requestedBy: 'chat_continuum:full_auto',
@@ -284,12 +305,16 @@ export function createChatContinuum(deps) {
     }
   }
 
-  async function runLlmPipeline(card, threadBefore, price, { includePriceInDraft }) {
+  async function runLlmPipeline(card, threadBefore, price, { includePriceInDraft, settings = null }) {
+    const history = buildConversationHistory(card.messages || []);
+    const clientTurn = latestClientTurn(history);
+    const clientText = clientTurn.join('\n');
     const roomContext = {
       roomId: card.roomId,
       guestName: card.guestName,
       project: card.project,
       messages: card.messages,
+      history,
       projectTitle: card.project?.title,
       prior: threadContext(threadBefore),
     };
@@ -301,31 +326,40 @@ export function createChatContinuum(deps) {
       analysis = { ok: false, reason: e.message, summary: 'خطا در تحلیل.' };
     }
 
-    const ownerNoteParts = [];
-    const existingNote = roomState.getNote(card.roomId)?.text;
-    if (existingNote) ownerNoteParts.push(existingNote);
-    if (threadBefore.lastSentText) {
-      ownerNoteParts.push(
-        `پیام قبلی ما: ${String(threadBefore.lastSentText).slice(0, 400)}`
-      );
-    }
+    const s = settings || settingsStore?.get?.() || {};
+    const negotiation = detectNegotiation(clientText);
+    const discount = evaluateDiscount(negotiation, {
+      basePrice: price?.amount ?? threadBefore.suggestedPrice ?? null,
+      maxDiscountPct: s.pricing?.maxDiscountPct,
+      priceFloorToman: s.pricing?.priceFloorToman,
+    });
+
+    const internal = [];
     if (threadBefore.summary) {
-      ownerNoteParts.push(`خلاصه قبلی: ${String(threadBefore.summary).slice(0, 300)}`);
+      internal.push(`خلاصهٔ قبلی گفتگو: ${String(threadBefore.summary).slice(0, 300)}`);
     }
+    const days = analysis?.data?.estimated_days;
+    if (days) internal.push(`زمان تخمینی تحلیل: حدود ${Number(days).toLocaleString('fa-IR')} روز کاری.`);
     if (price?.amount && includePriceInDraft) {
-      ownerNoteParts.push(
-        `قیمت پیشنهادی داخلی حدود ${price.labelFa} است؛ اگر مناسب بود طبیعی در پاسخ بگنجان.`
+      internal.push(
+        `قیمت پیشنهادی داخلی حدود ${price.labelFa} است؛ فقط اگر کارفرما قیمت خواست بگو.`
       );
     } else if (price?.amount) {
-      ownerNoteParts.push(
-        `قیمت پیشنهادی داخلی: ${price.labelFa} (در متن نیاور مگر کارفرما بپرسد).`
+      internal.push(`قیمت پیشنهادی داخلی: ${price.labelFa} (در متن نیاور مگر کارفرما بپرسد).`);
+    }
+    if (negotiation.askedDiscount) {
+      internal.push(
+        discount.needsOwner
+          ? 'کارفرما تخفیف بیشتر از سقف خواسته؛ قول تخفیف نده و بگو بررسی می‌کنی.'
+          : `سقف تخفیف مجاز ${discount.maxPct}٪ است${discount.minPrice ? ` و کف قیمت ${formatTomanFa(discount.minPrice)}` : ''}.`
       );
     }
-    ownerNoteParts.push('پاسخ را کوتاه، انسانی و فارسی بنویس.');
+    internal.push('پاسخ را کوتاه، انسانی و فارسی بنویس.');
 
+    const ownerNote = roomState.getNote(card.roomId)?.text || '';
     const currentDraft =
-      roomState.getDraft(card.roomId)?.text ||
       card.draftText ||
+      roomState.getDraft(card.roomId)?.text ||
       buildDraftReply({
         ...roomContext,
         ownerNote: '',
@@ -336,15 +370,39 @@ export function createChatContinuum(deps) {
     const adapted = await adaptDraftWithNote({
       roomContext,
       currentDraft,
-      ownerNote: ownerNoteParts.join('\n'),
+      ownerNote,
+      internalNote: internal.join('\n'),
       llm,
       mode: 'analyze',
+      analysis,
+      pricing: price?.amount
+        ? { amount: price.amount, currency: 'تومان', labelFa: price.labelFa, source: price.source }
+        : null,
+      negotiation: {
+        ...negotiation,
+        maxDiscountPct: discount.maxPct,
+        minPrice: discount.minPrice,
+      },
     });
+
+    const analysisConf = analysis?.ok ? Number(analysis.confidence ?? analysis.data?.confidence) : null;
+    const draftConf = adapted.llmUsed && adapted.confidence != null ? Number(adapted.confidence) : null;
+    const confidence =
+      analysisConf != null && Number.isFinite(analysisConf)
+        ? draftConf != null && Number.isFinite(draftConf)
+          ? Math.min(analysisConf, draftConf)
+          : analysisConf
+        : null;
 
     return {
       analysis,
       draftText: cleanHumanReply(adapted.text || currentDraft),
       llmUsed: Boolean(adapted.llmUsed),
+      fallback: adapted.fallback !== false || !adapted.llmUsed,
+      confidence,
+      clientText,
+      negotiation,
+      discount,
     };
   }
 
@@ -409,6 +467,41 @@ export function createChatContinuum(deps) {
       return settingsStore?.get?.()?.chatAiMode || 'full_manual';
     },
   };
+}
+
+/**
+ * Safety checks that force owner approval before the gate even runs.
+ * @returns {{ reason: string, reasonFa: string }|null}
+ */
+export function autoSafetyCheck(pipe, settings = {}) {
+  if (!pipe?.llmUsed || pipe.fallback) {
+    return { reason: 'llm_fallback', reasonFa: 'متن با هوش مصنوعی ساخته نشد؛ پیش‌نویس ساده فقط با تأیید شما ارسال می‌شود' };
+  }
+  if (!pipe.analysis?.ok) {
+    return { reason: 'analysis_unavailable', reasonFa: 'تحلیل درخواست کامل نشد؛ نیاز به بررسی شما' };
+  }
+  const min = Number.isFinite(Number(settings.autoMinConfidence)) ? Number(settings.autoMinConfidence) : 0.6;
+  if (pipe.confidence == null || pipe.confidence < min) {
+    return { reason: 'low_confidence', reasonFa: 'اطمینان AI پایین است؛ نیاز به تأیید شما' };
+  }
+  if (pipe.discount?.needsOwner) {
+    return {
+      reason: pipe.discount.reason || 'discount_over_limit',
+      reasonFa: 'کارفرما تخفیفی بیشتر از سقف مجاز خواسته؛ تصمیم با شما',
+    };
+  }
+  if (!String(pipe.clientText || '').trim()) {
+    return { reason: 'no_client_text', reasonFa: 'پیام تازه‌ای از کارفرما پیدا نشد' };
+  }
+  return null;
+}
+
+function formatTomanFa(n) {
+  try {
+    return `${Number(n).toLocaleString('fa-IR')} تومان`;
+  } catch {
+    return `${n} تومان`;
+  }
 }
 
 function hashShort(text) {

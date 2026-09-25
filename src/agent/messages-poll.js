@@ -12,6 +12,8 @@ import { extractProposalHints } from '../telegram/room-card.js';
 import { getVerifiedMutation } from '../api/contracts/verified-mutation.js';
 import { logger } from '../observability/logger.js';
 import { createChatContinuum } from './chat-continuum.js';
+import { markOwnMessages, sortChronological } from './conversation.js';
+import { getOwnUserId } from './own-identity.js';
 
 /**
  * @param {object} ctx
@@ -40,6 +42,7 @@ export async function runMessagesPoll(ctx, payload = {}) {
   }
 
   const sendApiLive = Boolean(getVerifiedMutation('messages.send'));
+  const ownUserId = await getOwnUserId({ api, db }).catch(() => null);
   const { rooms, pagination } = await api.rooms.list({ page });
   const list = (rooms || []).filter(Boolean);
 
@@ -68,7 +71,7 @@ export async function runMessagesPoll(ctx, payload = {}) {
     try {
       roomsFetched += 1;
       const data = await api.messages.list(room.id, { page: 1 });
-      const messages = data.messages || [];
+      const messages = markOwnMessages(data.messages || [], ownUserId);
       messagesSeen += messages.length;
 
       const seen = roomState.getSeenIds(room.id);
@@ -164,12 +167,19 @@ export async function runMessagesPoll(ctx, payload = {}) {
             }
           : null,
         projectSlug,
-        messages: messages.slice(-8).map((m) => ({
+        messages: sortChronological(messages).slice(-12).map((m) => ({
           id: m.id,
           text: m.text,
           isOwn: m.isOwn,
+          senderId: m.senderId ?? null,
           createdAt: m.createdAt,
         })),
+        clientUserId:
+          sortChronological(messages)
+            .reverse()
+            .find((m) => m.isOwn === false && (m.senderId || m.userId))?.senderId ||
+          data.roomMeta?.userId ||
+          null,
         attachments,
         attachmentsNote: attachments.length
           ? null
