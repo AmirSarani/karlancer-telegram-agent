@@ -93,3 +93,29 @@ Modules: `src/agent/scan-prepare.js`, `src/worker/handlers.js` (`rooms.scan` / `
   settings `pricing.maxDiscountPct` (default 10) and `pricing.priceFloorToman`. A request above the limit or
   below the floor goes to the owner. `REPLY_SYSTEM` includes `NEGOTIATION_RULES` (portfolio: point to the
   Karlancer profile, no outside links).
+
+## Phase B — full-auto that actually works, safely (2026-09)
+
+- **Default criterion (chosen over a mandatory wizard):** when `rules.messageAuto.enabled` is on and no
+  criterion is set, the gate requires AI confidence ≥ `DEFAULT_MESSAGE_SCORE_THRESHOLD` (60). Chat score =
+  analysis/draft confidence × 100, computed per reply; a missing score → `score_unavailable` (owner card).
+  Keywords are matched against the **client's** text, not our draft.
+- **Wizard:** «📜 قوانین» → «✏️ معیار پیام خودکار» (lines `کلیدواژه:` / `حداقل بودجه:` / `حداقل اطمینان:`,
+  «پاک» clears) and «💸 سقف تخفیف و کف قیمت» (`تخفیف:` / `کف قیمت:`). Persian digits accepted
+  (`src/telegram/rule-wizard.js`).
+- **Daily auto limit** counts only `auto.*` audit rows in the **Tehran day** (`tehranDayBounds`). Owner
+  confirmations are audited as `owner.<action>` and never count. Preview cards (`approvalPreviewFirstN`)
+  are counted separately (`previews`) and only while live auto-send is allowed.
+- **Answered only after POST success.** Continuum/owner confirm set decision `sending`
+  (+ `thread.pendingSendJobId`); the worker (`messages.send`) calls `markAnswered` after a successful POST
+  and emits `message.sent`; failures emit `message.blocked` (decision `blocked`). `index.js` turns both
+  (and `bid.blocked`) into Persian owner notices on Telegram **and** Bale (`notifyAllOwnersChannels`).
+- **Double-send guard:** if `thread.lastSentAt` is newer than the job's `createdAt`, the job goes to
+  `needs_reconciliation` (`superseded_by_newer_send`) without a POST.
+- **scan-prepare skips** (`scanSkipReason`): `sending`, `already_answered` (no newer inbound),
+  `no_fresh_inbound` (unread 0 and not an invite), `already_carded` (continuum already made a card for
+  the latest inbound). Pending-send check kept.
+- **Token budget:** chat continuum and scan-prepare call `budget.decide({intent:'draft_chat_reply'})`;
+  when `DAILY_TOKEN_LIMIT` is exhausted the LLM is skipped and full-auto routes to the owner
+  (`token_budget_exceeded`).
+- Room cards show «📤 در حال ارسال» and «چرا خودکار نفرستادم: …».

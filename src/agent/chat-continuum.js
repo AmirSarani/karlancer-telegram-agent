@@ -36,6 +36,7 @@ export const CHAT_AI_MODE_LABELS_FA = Object.freeze({
  * @param {ReturnType<import('../telegram/mutation-request.js').createMutationRequester>|null} [deps.mutations]
  * @param {() => boolean} [deps.getAllowLiveAutoSend]
  * @param {object|null} [deps.scoringProfile]
+ * @param {{ decide: Function }|null} [deps.budget] TokenBudgetManager (DAILY_TOKEN_LIMIT)
  */
 export function createChatContinuum(deps) {
   const {
@@ -46,7 +47,23 @@ export function createChatContinuum(deps) {
     mutations = null,
     getAllowLiveAutoSend = () => false,
     scoringProfile = null,
+    budget = null,
   } = deps;
+
+  /** LLM for this call, or null when the daily token budget is exhausted. */
+  function llmWithinBudget() {
+    if (!llm) return { llm: null, budgetExceeded: false };
+    if (budget && typeof budget.decide === 'function') {
+      try {
+        if (budget.decide({ intent: 'draft_chat_reply', estimatedTokens: 3000 }) === 'budget_exceeded') {
+          return { llm: null, budgetExceeded: true };
+        }
+      } catch {
+        /* ignore budget errors */
+      }
+    }
+    return { llm, budgetExceeded: false };
+  }
 
   const settingsStore = db ? createAgentSettingsStore(db) : null;
 
@@ -210,6 +227,16 @@ export function createChatContinuum(deps) {
       verdict.showCard;
 
     if (needsHitl) {
+      if (liveOk && verdict && verdict.reason === 'auto_preview_card' && typeof gate?.recordDecision === 'function') {
+        try {
+          gate.recordDecision('messages.send', verdict, {
+            actor: 'chat_continuum:preview',
+            roomId: base.roomId,
+          });
+        } catch {
+          /* ignore audit errors */
+        }
+      }
       roomState.setDecision(base.roomId, {
         status: 'pending',
         detail: !liveOk
@@ -273,9 +300,12 @@ export function createChatContinuum(deps) {
         return enriched;
       }
 
-      roomState.markAnswered(base.roomId, {
-        lastSentText: draftText,
-        summary: analysis?.summary || null,
+      // Answered only after the worker's POST succeeds (handlers.js messages.send → markAnswered).
+      const jobId = out.job?.jobId || out.job?.id || null;
+      roomState.setDecision(base.roomId, { status: 'sending', detail: jobId });
+      roomState.setThread(base.roomId, {
+        pendingSendJobId: jobId,
+        summary: analysis?.summary || threadBefore.summary,
       });
       const enriched = enrichCard(card, {
         ...base,
@@ -284,8 +314,8 @@ export function createChatContinuum(deps) {
         continuumAction: 'auto_sent',
         pickPrompt: false,
         llmUsed,
-        autoSend: { ok: true, jobId: out.job?.jobId || out.job?.id || null },
-        decisionStatus: 'answered',
+        autoSend: { ok: true, jobId, queued: true },
+        decisionStatus: 'sending',
       });
       roomState.setCard(base.roomId, enriched);
       return enriched;
@@ -319,9 +349,10 @@ export function createChatContinuum(deps) {
       prior: threadContext(threadBefore),
     };
 
+    const { llm: effLlm, budgetExceeded } = llmWithinBudget();
     let analysis = null;
     try {
-      analysis = await analyzeRoomWithLlm({ roomContext, llm });
+      analysis = await analyzeRoomWithLlm({ roomContext, llm: effLlm });
     } catch (e) {
       analysis = { ok: false, reason: e.message, summary: 'خطا در تحلیل.' };
     }
@@ -372,7 +403,7 @@ export function createChatContinuum(deps) {
       currentDraft,
       ownerNote,
       internalNote: internal.join('\n'),
-      llm,
+      llm: effLlm,
       mode: 'analyze',
       analysis,
       pricing: price?.amount
@@ -403,6 +434,7 @@ export function createChatContinuum(deps) {
       clientText,
       negotiation,
       discount,
+      budgetExceeded,
     };
   }
 
@@ -474,6 +506,9 @@ export function createChatContinuum(deps) {
  * @returns {{ reason: string, reasonFa: string }|null}
  */
 export function autoSafetyCheck(pipe, settings = {}) {
+  if (pipe?.budgetExceeded) {
+    return { reason: 'token_budget_exceeded', reasonFa: 'سقف مصرف روزانهٔ هوش مصنوعی پر شده؛ پیش‌نویس ساده برای تأیید شما' };
+  }
   if (!pipe?.llmUsed || pipe.fallback) {
     return { reason: 'llm_fallback', reasonFa: 'متن با هوش مصنوعی ساخته نشد؛ پیش‌نویس ساده فقط با تأیید شما ارسال می‌شود' };
   }
@@ -482,7 +517,7 @@ export function autoSafetyCheck(pipe, settings = {}) {
   }
   const min = Number.isFinite(Number(settings.autoMinConfidence)) ? Number(settings.autoMinConfidence) : 0.6;
   if (pipe.confidence == null || pipe.confidence < min) {
-    return { reason: 'low_confidence', reasonFa: 'اطمینان AI پایین است؛ نیاز به تأیید شما' };
+    return { reason: 'low_confidence', reasonFa: 'اطمینان هوش مصنوعی به این پاسخ کم است؛ نیاز به تأیید شما' };
   }
   if (pipe.discount?.needsOwner) {
     return {

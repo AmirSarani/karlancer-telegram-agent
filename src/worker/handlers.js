@@ -242,6 +242,7 @@ export async function handleJob(ctx, job) {
             mutations: ctx.mutations || null,
             llm: ctx.llm || null,
             queue: ctx.queue || null,
+            budget: ctx.budget || null,
           });
           const prep = await preparer.prepareScanHits({
             priorityRooms,
@@ -308,6 +309,7 @@ export async function handleJob(ctx, job) {
         mutations: ctx.mutations || null,
         llm: ctx.llm || null,
         queue: ctx.queue || null,
+        budget: ctx.budget || null,
       });
       const prep = await preparer.prepareScanHits({
         priorityRooms: last.priorityRooms || [],
@@ -353,6 +355,7 @@ export async function handleJob(ctx, job) {
           llm: ctx.llm || null,
           gate: ctx.gate || null,
           mutations: ctx.mutations || null,
+          budget: ctx.budget || null,
           getAllowLiveAutoSend:
             typeof ctx.getAllowLiveAutoSend === 'function'
               ? ctx.getAllowLiveAutoSend
@@ -424,6 +427,7 @@ export async function handleJob(ctx, job) {
             errorCode: v.errorCode,
             result: v.detail,
           });
+          await emit(ctx, 'bid.blocked', { code: v.errorCode, projectId: p.projectId, posted: false });
           return { ok: false, errorCode: v.errorCode, detail: v.detail, terminal: true, posted: false };
         }
       }
@@ -459,6 +463,7 @@ export async function handleJob(ctx, job) {
       try {
         const check = await api.bids.check([p.projectId]);
         if (!check.weBidFor(p.projectId)) {
+          await emit(ctx, 'bid.blocked', { code: 'bid_not_visible_yet', projectId: p.projectId, posted: true });
           ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
             errorCode: 'bid_not_visible_yet',
             result: { submit: data, check },
@@ -483,6 +488,10 @@ export async function handleJob(ctx, job) {
     }
 
     case 'messages.send': {
+      const roomState = createRoomState(db);
+      const roomId = p.roomId != null ? String(p.roomId) : null;
+      const isAuto = String(job.requestedBy || '').startsWith('chat_continuum') || String(job.requestedBy || '').startsWith('followup');
+      const guestName = roomId ? roomState.getCard(roomId)?.guestName || null : null;
       {
         const v = revalidateMutationBeforePost(ctx, job);
         if (!v.ok) {
@@ -490,7 +499,22 @@ export async function handleJob(ctx, job) {
             errorCode: v.errorCode,
             result: v.detail,
           });
+          await emit(ctx, 'message.blocked', { roomId, guestName, code: v.errorCode, posted: false, auto: isAuto, stage: 'revalidate' });
           return { ok: false, errorCode: v.errorCode, detail: v.detail, terminal: true, posted: false };
+        }
+      }
+      // Double-send guard: a newer message already went to this room after this draft was queued.
+      if (roomId) {
+        const thread = roomState.getThread(roomId);
+        const sentAt = Date.parse(thread.lastSentAt || '');
+        const createdAt = Date.parse(job.createdAt || '');
+        if (Number.isFinite(sentAt) && Number.isFinite(createdAt) && sentAt > createdAt) {
+          ctx.queue.setStatus(job.jobId, 'needs_reconciliation', {
+            errorCode: 'superseded_by_newer_send',
+            result: { lastSentAt: thread.lastSentAt },
+          });
+          await emit(ctx, 'message.blocked', { roomId, guestName, code: 'superseded_by_newer_send', posted: false, auto: isAuto, stage: 'guard' });
+          return { ok: false, errorCode: 'superseded_by_newer_send', terminal: true, posted: false };
         }
       }
       const operationId = job.operationId || p.operationId || crypto.randomUUID();
@@ -500,10 +524,38 @@ export async function handleJob(ctx, job) {
           errorCode: data.status || 'blocked_by_missing_api',
           result: data,
         });
-        await emit(ctx, 'message.blocked', { code: data.status, posted: data.posted === true });
+        if (roomId) {
+          roomState.setDecision(roomId, { status: 'blocked', detail: data.status || 'blocked_by_missing_api' });
+        }
+        await emit(ctx, 'message.blocked', {
+          roomId,
+          guestName,
+          code: data.status,
+          posted: data.posted === true,
+          auto: isAuto,
+          stage: 'post',
+        });
         return { ok: false, errorCode: 'needs_reconciliation', detail: data, terminal: true };
       }
-      await emit(ctx, 'message.sent', { roomId: p.roomId });
+      if (roomId) {
+        roomState.markAnswered(roomId, {
+          lastSentText: p.text,
+          summary: roomState.getThread(roomId)?.summary || null,
+        });
+        roomState.setThread(roomId, { pendingSendJobId: null });
+        if (p.followUp) {
+          const th = roomState.getThread(roomId);
+          roomState.setThread(roomId, { followUpCount: (Number(th.followUpCount) || 0) + 1, lastFollowUpAt: new Date().toISOString() });
+        }
+      }
+      await emit(ctx, 'message.sent', {
+        roomId,
+        guestName,
+        auto: isAuto,
+        followUp: Boolean(p.followUp),
+        textPreview: String(p.text || '').slice(0, 160),
+        price: p.price ?? null,
+      });
       return { ok: true, result: data };
     }
 

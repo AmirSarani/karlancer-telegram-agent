@@ -52,7 +52,13 @@ import {
 } from './control-panel.js';
 import { readLiveAutoBidFlag, writeLiveAutoBidFlag } from './live-auto-flag.js';
 import { createAgentSettingsStore, getTodayAutoCounts } from './agent-settings.js';
-import { formatFriendlyError } from './ui.js';
+import { formatFriendlyError, formatRulesCard, rulesInlineKeyboard } from './ui.js';
+import {
+  parseMessageRuleWizard,
+  parsePricingWizard,
+  MESSAGE_RULE_WIZARD_HELP,
+  PRICING_WIZARD_HELP,
+} from './rule-wizard.js';
 import { InlineKeyboard } from 'grammy';
 
 /**
@@ -493,6 +499,24 @@ export function createControlHandlers(deps) {
           { edit }
         );
       },
+      wiz_msg_rule: async () => {
+        if (wizard) wizard.set(ctx.from?.id, { kind: 'msg_rule' });
+        await editOrReply(
+          ctx,
+          MESSAGE_RULE_WIZARD_HELP,
+          { reply_markup: new InlineKeyboard().text('⬅️ قوانین', 'nav:rules') },
+          { edit }
+        );
+      },
+      wiz_pricing: async () => {
+        if (wizard) wizard.set(ctx.from?.id, { kind: 'pricing' });
+        await editOrReply(
+          ctx,
+          PRICING_WIZARD_HELP,
+          { reply_markup: new InlineKeyboard().text('⬅️ قوانین', 'nav:rules') },
+          { edit }
+        );
+      },
       wiz_bl_rooms: async () => {
         if (wizard) wizard.set(ctx.from?.id, { kind: 'bl_rooms' });
         await editOrReply(
@@ -608,6 +632,25 @@ export function createControlHandlers(deps) {
       wizard.clear(ctx.from?.id);
       await ctx.reply('✅ سقف روزانه ذخیره شد.', menuOpts());
       await replyLimits(ctx);
+      return true;
+    }
+
+    if (st.kind === 'msg_rule' || st.kind === 'pricing') {
+      const parsed = st.kind === 'msg_rule' ? parseMessageRuleWizard(textIn) : parsePricingWizard(textIn);
+      if (!parsed.ok) {
+        await ctx.reply([...parsed.errors, '', 'دوباره بفرستید یا /cancel'].join('\n'), menuOpts());
+        return true;
+      }
+      const store = createAgentSettingsStore(db);
+      const cur = store.get();
+      if (st.kind === 'msg_rule') {
+        store.update({ rules: { ...cur.rules, messageAuto: { ...cur.rules.messageAuto, ...parsed.patch } } });
+      } else {
+        store.update({ pricing: { ...cur.pricing, ...parsed.patch } });
+      }
+      wizard.clear(ctx.from?.id);
+      await ctx.reply('✅ ذخیره شد.', menuOpts());
+      await ctx.reply(formatRulesCard(store.get()), { reply_markup: rulesInlineKeyboard() });
       return true;
     }
 

@@ -201,6 +201,9 @@ export function createRoomState(db) {
      *   lastInboundAt: string|null,
      *   notes: string|null,
      *   suggestedPrice: number|null,
+     *   pendingSendJobId: string|null,
+     *   followUpCount: number,
+     *   lastFollowUpAt: string|null,
      *   updatedAt: string|null,
      * }}
      */
@@ -216,6 +219,9 @@ export function createRoomState(db) {
         lastInboundAt: v.lastInboundAt || null,
         notes: v.notes || null,
         suggestedPrice: v.suggestedPrice ?? null,
+        pendingSendJobId: v.pendingSendJobId || null,
+        followUpCount: Number(v.followUpCount) || 0,
+        lastFollowUpAt: v.lastFollowUpAt || null,
         updatedAt: v.updatedAt || row?.updatedAt || null,
       };
     },

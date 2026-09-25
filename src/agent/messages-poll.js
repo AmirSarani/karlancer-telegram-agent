@@ -254,6 +254,7 @@ export async function runMessagesPoll(ctx, payload = {}) {
         gate,
         mutations,
         getAllowLiveAutoSend,
+        budget: ctx.budget || null,
       });
       cards = await continuum.processPollCards(cards);
       summary.newCards = cards.length;

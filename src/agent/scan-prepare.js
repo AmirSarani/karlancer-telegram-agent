@@ -64,7 +64,20 @@ export function createScanPrepare(deps) {
     llm = null,
     roomState: roomStateIn = null,
     queue = null,
+    budget = null,
   } = deps;
+
+  function llmWithinBudget() {
+    if (!llm) return null;
+    if (budget && typeof budget.decide === 'function') {
+      try {
+        if (budget.decide({ intent: 'draft_chat_reply', estimatedTokens: 3000 }) === 'budget_exceeded') return null;
+      } catch {
+        /* ignore */
+      }
+    }
+    return llm;
+  }
 
   const roomState = roomStateIn || createRoomState(db);
   const settingsStore = createAgentSettingsStore(db);
@@ -129,6 +142,11 @@ export function createScanPrepare(deps) {
         }
 
         const invite = matchedByRoom.get(roomId) || null;
+        const skip = scanSkipReason({ room, invite, roomState, roomId, force: Boolean(input.force) });
+        if (skip) {
+          items.push({ roomId, kind: 'reply', status: 'skipped', reason: skip });
+          continue;
+        }
         // Prefer chat reply prepare; if invite-only with project and little chat signal, also bid
         const replyOut = await prepareRoomReply(room, invite);
         items.push(replyOut);
@@ -222,7 +240,7 @@ export function createScanPrepare(deps) {
 
     let analysis = null;
     try {
-      analysis = await analyzeRoomWithLlm({ roomContext, llm });
+      analysis = await analyzeRoomWithLlm({ roomContext, llm: llmWithinBudget() });
     } catch (e) {
       analysis = { ok: false, reason: e.message, summary: 'خطا در تحلیل.' };
     }
@@ -250,7 +268,7 @@ export function createScanPrepare(deps) {
       currentDraft: roomState.getDraft(roomId)?.text || template.text,
       ownerNote: existingNote,
       internalNote: internal.join('\n'),
-      llm,
+      llm: llmWithinBudget(),
       mode: 'analyze',
       analysis,
       pricing: price?.amount ? { amount: price.amount, currency: 'تومان', labelFa: price.labelFa } : null,
@@ -469,6 +487,44 @@ export function pickRoomsToPrepare(priorityRooms = [], matched = [], max = SCAN_
     return 0;
   });
   return list.slice(0, max);
+}
+
+/** Chat-continuum actions that already produced a card / send for the latest inbound. */
+const CONTINUUM_HANDLED = new Set(['auto_hitl', 'pick_to_answer', 'auto_sent', 'hitl_emergency', 'scan_hitl']);
+
+/**
+ * Why scan-prepare should NOT draft this room (null → prepare).
+ * - already answered / sending with no newer inbound
+ * - no fresh inbound (unread 0) unless it is a matched invite
+ * - chat continuum already made a card/send for the latest inbound
+ * @returns {string|null}
+ */
+export function scanSkipReason({ room = {}, invite = null, roomState, roomId, force = false }) {
+  if (!roomState) return null;
+  const decision = roomState.getDecision(roomId);
+  const thread = roomState.getThread(roomId);
+  if (decision?.status === 'sending') return 'sending';
+  const sentAt = Date.parse(thread.lastSentAt || '');
+  const inboundAt = Date.parse(thread.lastInboundAt || '');
+  const unread = Number(room.unread) || 0;
+  if (
+    (decision?.status === 'answered' || Number.isFinite(sentAt)) &&
+    unread <= 0 &&
+    (!Number.isFinite(inboundAt) || !Number.isFinite(sentAt) || inboundAt <= sentAt)
+  ) {
+    return 'already_answered';
+  }
+  if (!force && unread <= 0 && !invite) return 'no_fresh_inbound';
+  const card = roomState.getCard(roomId);
+  if (
+    decision?.status === 'pending' &&
+    card &&
+    CONTINUUM_HANDLED.has(String(card.continuumAction || '')) &&
+    (!Number.isFinite(inboundAt) || Date.parse(decision.updatedAt || '') >= inboundAt)
+  ) {
+    return 'already_carded';
+  }
+  return null;
 }
 
 function hasPendingSendForRoom(queue, roomId) {
