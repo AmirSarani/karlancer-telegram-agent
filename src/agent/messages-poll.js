@@ -199,6 +199,12 @@ export async function runMessagesPoll(ctx, payload = {}) {
       };
 
       roomState.setCard(room.id, card);
+      // Owner replied directly on the Karlancer website → register as answered so the 24h follow-up applies.
+      try {
+        registerWebsiteReply(roomState, room.id, messages);
+      } catch {
+        /* best effort */
+      }
       roomState.setCursor(room.id, {
         lastUpdatedAt: room.updatedAt || new Date().toISOString(),
         lastMessageId: messages[0]?.id || messages[messages.length - 1]?.id || null,
@@ -281,3 +287,40 @@ export async function runMessagesPoll(ctx, payload = {}) {
 }
 
 export default runMessagesPoll;
+
+/**
+ * If the newest message in the room is ours (sender_id == own user id) and it is not the text the
+ * bot itself sent, the owner answered on the website: mark the room answered with that message time.
+ * @returns {boolean} true when the thread was updated
+ */
+export function registerWebsiteReply(roomState, roomId, messages = [], { now = Date.now() } = {}) {
+  const chrono = sortChronological(messages || []);
+  const last = chrono[chrono.length - 1];
+  if (!last || last.isOwn !== true) return false;
+  const thread = roomState.getThread(roomId) || {};
+  const lastId = last.id != null ? String(last.id) : null;
+  if (lastId && thread.lastOwnMsgId === lastId) return false;
+  const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+  const sentByBot = thread.lastSentText && norm(thread.lastSentText) === norm(last.text);
+  const parsed = Date.parse(last.createdAt || '');
+  const at = Number.isFinite(parsed) && parsed <= now + 60_000 ? new Date(parsed).toISOString() : new Date(now).toISOString();
+  if (sentByBot) {
+    roomState.setThread(roomId, { lastOwnMsgId: lastId });
+    return false;
+  }
+  const prevSent = Date.parse(thread.lastSentAt || '');
+  if (Number.isFinite(prevSent) && Date.parse(at) <= prevSent) {
+    roomState.setThread(roomId, { lastOwnMsgId: lastId });
+    return false;
+  }
+  roomState.setThread(roomId, {
+    phase: 'answered',
+    lastSentAt: at,
+    lastSentText: String(last.text || '').slice(0, 4000),
+    lastOwnMsgId: lastId,
+    answeredVia: 'website',
+  });
+  const d = roomState.getDecision(roomId);
+  if (!d || d.status === 'pending') roomState.setDecision(roomId, { status: 'answered', detail: 'website_reply' });
+  return true;
+}
