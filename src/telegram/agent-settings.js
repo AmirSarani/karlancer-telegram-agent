@@ -289,28 +289,67 @@ export function appendAutomationAudit(db, entry) {
  * @param {import('better-sqlite3').Database} db
  * @param {{ tenantId?: string, day?: string }} [opts]
  */
-export function getTodayAutoCounts(db, { tenantId = 'default', day = null } = {}) {
-  const d = day || new Date().toISOString().slice(0, 10);
+/** Iran Standard Time: fixed UTC+03:30 (no DST since 2022). */
+export const TEHRAN_OFFSET_MS = 210 * 60 * 1000;
+
+/**
+ * Tehran calendar day (YYYY-MM-DD) and its UTC bounds.
+ * @param {number|Date} [now]
+ * @param {string|null} [day] explicit Tehran day
+ */
+export function tehranDayBounds(now = Date.now(), day = null) {
+  const t = now instanceof Date ? now.getTime() : Number(now);
+  const d = day || new Date(t + TEHRAN_OFFSET_MS).toISOString().slice(0, 10);
+  const start = Date.parse(`${d}T00:00:00.000Z`) - TEHRAN_OFFSET_MS;
+  return {
+    day: d,
+    startIso: new Date(start).toISOString(),
+    endIso: new Date(start + 86_400_000).toISOString(),
+  };
+}
+
+/**
+ * Count today's (Tehran day) automatic actions from audit_log.
+ * Owner-confirmed sends are audited as `owner.*` and never count here.
+ * `previews` = auto-eligible actions shown as a preview card today.
+ * @param {import('better-sqlite3').Database} db
+ * @param {{ tenantId?: string, day?: string, now?: number }} [opts]
+ */
+export function getTodayAutoCounts(db, { tenantId = 'default', day = null, now = Date.now() } = {}) {
+  const { day: d, startIso, endIso } = tehranDayBounds(now, day);
   const rows = db
     .prepare(
-      `SELECT action, detail_json FROM audit_log
+      `SELECT action, result_code, detail_json FROM audit_log
        WHERE tenant_id = ? AND tool = 'permission_gate'
          AND created_at >= ? AND created_at < ?
-         AND action LIKE 'auto.%'`
+         AND (action LIKE 'auto.%' OR action LIKE 'gate.%')`
     )
-    .all(tenantId, `${d}T00:00:00.000Z`, `${d}T23:59:59.999Z`);
+    .all(tenantId, startIso, endIso);
   let messages = 0;
   let bids = 0;
   let markRead = 0;
   let other = 0;
+  let previews = 0;
+  let total = 0;
   for (const r of rows) {
+    if (r.action.startsWith('gate.')) {
+      let reason = null;
+      try {
+        reason = JSON.parse(r.detail_json || '{}').reason;
+      } catch {
+        reason = null;
+      }
+      if (reason === 'auto_preview_card') previews += 1;
+      continue;
+    }
+    total += 1;
     if (r.action === 'auto.messages.send') messages += 1;
     else if (r.action === 'auto.bids.submit') bids += 1;
     else if (r.action === 'auto.notifications.mark_read' || r.action === 'auto.messages.mark_seen')
       markRead += 1;
     else other += 1;
   }
-  return { day: d, messages, bids, markRead, other, total: rows.length };
+  return { day: d, messages, bids, markRead, other, previews, total };
 }
 
 /**

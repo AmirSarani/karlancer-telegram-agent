@@ -43,3 +43,10 @@ When mode=auto **and** opportunity rule action=`AUTO_EXECUTE` **and** `autoSubmi
 4. Owner scoring profile must be configured (`scoringAvailable=true`) for score-threshold rules.
 
 Never: unlimited auto, auto without matching rule, bypass of VerifiedMutationContract.
+
+## Message auto rule: default criterion (Phase B)
+
+- Enabled message rule with no criteria → auto only when AI confidence ≥ 60% (`DEFAULT_MESSAGE_SCORE_THRESHOLD`).
+- Configure in Telegram: «📜 قوانین» → «✏️ معیار پیام خودکار» / «💸 سقف تخفیف و کف قیمت».
+- Daily limit counts only automatic sends (Tehran day); owner-confirmed sends are audited as `owner.*`.
+- Live sending still needs `ALLOW_LIVE_AUTO_SEND=true` (kept **false** on the production VPS) + gate + VerifiedMutationContract.

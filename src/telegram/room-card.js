@@ -359,6 +359,9 @@ export function formatRoomCard(card = {}) {
   if (card.suggestedPriceFa) {
     lines.push(`• قیمت پیشنهادی (داخلی): ${card.suggestedPriceFa}`);
   }
+  if (card.pickPrompt && card.gateVerdict?.reasonFa) {
+    lines.push(`• چرا خودکار نفرستادم: ${truncatePersianText(String(card.gateVerdict.reasonFa), { max: 140, lines: 2 })}`);
+  }
   if (card.pickPrompt) {
     lines.push('', '❓ جواب بدم؟ از دکمه‌ها یکی را انتخاب کنید.');
   }
@@ -650,6 +653,7 @@ function riskEmoji(risk) {
 
 function decisionLine(status) {
   if (status === 'answered') return '• وضعیت: ✅ جواب داده شد';
+  if (status === 'sending') return '• وضعیت: 📤 در حال ارسال';
   if (status === 'approved') return '• وضعیت: ✅ تأیید شده';
   if (status === 'rejected') return '• وضعیت: ❌ رد شده';
   if (status === 'blocked') return '• وضعیت: ⛔ ارسال فعلاً فعال نیست';

@@ -299,17 +299,11 @@ export function createRoomFlows(deps) {
       }
     }
 
+    // «جواب داده شد» only after the worker confirms the send (message.sent event).
     roomState.setDecision(roomId, {
-      status: live ? 'approved' : 'blocked',
-      detail: live ? null : 'blocked_by_missing_api',
+      status: live ? 'sending' : 'blocked',
+      detail: live ? (decided?.job || job)?.jobId || null : 'blocked_by_missing_api',
     });
-
-    if (live) {
-      roomState.markAnswered(roomId, {
-        lastSentText: text,
-        summary: roomState.getThread(roomId)?.summary || null,
-      });
-    }
 
     if (!live) {
       const msg = [

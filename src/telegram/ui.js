@@ -295,6 +295,9 @@ export function rulesInlineKeyboard() {
     .text('🔌 روشن/خاموش پیام', 'rule:msg:tog')
     .text('🔌 روشن/خاموش پیشنهاد', 'rule:bid:tog')
     .row()
+    .text('✏️ معیار پیام خودکار', 'wiz:msg_rule')
+    .text('💸 سقف تخفیف و کف قیمت', 'wiz:pricing')
+    .row()
     .text('⬅️ تنظیمات', 'nav:set')
     .text('🏠 خانه', 'nav:home');
 }
@@ -330,6 +333,8 @@ export function parseCallbackData(data) {
     if (data === 'wiz:limits') return { type: 'wiz_limits' };
     if (data === 'wiz:bl_kw') return { type: 'wiz_bl_keywords' };
     if (data === 'wiz:bl_rooms') return { type: 'wiz_bl_rooms' };
+    if (data === 'wiz:msg_rule') return { type: 'wiz_msg_rule' };
+    if (data === 'wiz:pricing') return { type: 'wiz_pricing' };
     // control-panel map is applied in bot via parseControlCallback; keep aliases here too
     const cpMap = {
       'cp:hub': 'cp_hub',
@@ -767,9 +772,9 @@ export function formatRulesCard(s = {}) {
     '',
     '📨 پیام خودکار:',
     `• وضعیت: ${msg.enabled ? 'روشن' : 'خاموش (پیش‌فرض)'}`,
-    `• امتیاز: ${msg.scoringAvailable ? (msg.matchScoreThreshold ?? '—') : 'هنوز در دسترس نیست'}`,
+    `• حداقل اطمینان هوش مصنوعی: ${msg.matchScoreThreshold != null ? `${toFaNum(msg.matchScoreThreshold)}٪` : (msg.keywords?.length || msg.budgetMin != null || msg.clientStatus) ? '—' : 'پیش‌فرض ۶۰٪'}`,
     `• کلیدواژه‌ها: ${(msg.keywords || []).join('، ') || '—'}`,
-    `• حداقل بودجه: ${msg.budgetMin ?? '—'}`,
+    `• حداقل بودجه: ${msg.budgetMin != null ? `${toFaNum(Number(msg.budgetMin).toLocaleString('en-US'))} تومان` : '—'}`,
     '',
     '💼 پیشنهاد خودکار:',
     `• وضعیت: ${bid.enabled ? 'روشن' : 'خاموش (پیش‌فرض)'}`,
@@ -778,7 +783,11 @@ export function formatRulesCard(s = {}) {
     `• بدون پیشنهاد قبلی: ${bid.noExistingBid !== false ? 'بله' : 'خیر'}`,
     `• اطمینان: ${bid.scoringAvailable ? (bid.confidenceThreshold ?? '—') : 'هنوز در دسترس نیست'}`,
     '',
-    `سقف روزانه: پیام ${toFaNum(limits.maxAutoMessagesPerDay ?? 5)} · پیشنهاد ${toFaNum(limits.maxAutoBidsPerDay ?? 10)}`,
+    '💸 مذاکره قیمت:',
+    `• سقف تخفیف: ${toFaNum(s.pricing?.maxDiscountPct ?? 10)}٪`,
+    `• کف قیمت: ${s.pricing?.priceFloorToman ? `${toFaNum(Number(s.pricing.priceFloorToman).toLocaleString('en-US'))} تومان` : '—'}`,
+    '',
+    `سقف روزانه (فقط ارسال‌های خودکار): پیام ${toFaNum(limits.maxAutoMessagesPerDay ?? 5)} · پیشنهاد ${toFaNum(limits.maxAutoBidsPerDay ?? 10)}`,
     '',
     'تا قانون روشن نشود، خودکار اجرا نمی‌شود.',
     'ویرایش پیشرفته‌تر قوانین فرصت در «مغز» است.',

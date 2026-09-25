@@ -203,8 +203,9 @@ export function createPermissionGate(db, { tenantId = 'default' } = {}) {
           showCard: true,
         };
       }
-      // First N autos get a Telegram card; after that rule+limits are enough.
-      const showCard = counts.total < (s.approvalPreviewFirstN || 0);
+      // First N auto-eligible messages each (Tehran) day get a preview card;
+      // after that rule+limits are enough. Counts previews shown, not owner sends.
+      const showCard = (counts.previews || 0) < (s.approvalPreviewFirstN || 0);
       return {
         ...base,
         decision: showCard ? 'require_approval' : 'auto_allow',
@@ -247,7 +248,7 @@ export function createPermissionGate(db, { tenantId = 'default' } = {}) {
           showCard: true,
         };
       }
-      const show = counts.total < (s.approvalPreviewFirstN || 0);
+      const show = (counts.previews || 0) < (s.approvalPreviewFirstN || 0);
       return {
         ...base,
         decision: show ? 'require_approval' : 'auto_allow',
@@ -289,9 +290,14 @@ export function createPermissionGate(db, { tenantId = 'default' } = {}) {
   }
 
   function recordDecision(action, gateResult, extra = {}) {
-    const isAuto = gateResult.decision === 'auto_allow' || gateResult.reason?.startsWith('auto_');
-    const auditAction =
-      gateResult.decision === 'auto_allow'
+    const isAuto =
+      !String(gateResult.reason || '').startsWith('owner_confirm') &&
+      (gateResult.decision === 'auto_allow' || gateResult.reason?.startsWith('auto_'));
+    const ownerConfirmed =
+      gateResult.reason === 'owner_confirm' || gateResult.reason === 'owner_confirm_during_emergency';
+    const auditAction = ownerConfirmed
+      ? `owner.${action}`
+      : gateResult.decision === 'auto_allow'
         ? `auto.${action}`
         : gateResult.decision === 'deny'
           ? `deny.${action}`
@@ -366,6 +372,9 @@ function checkBlacklist(s, ctx) {
   return null;
 }
 
+/** Implicit criterion when the owner enabled the message rule without setting any: AI confidence ≥ 60. */
+export const DEFAULT_MESSAGE_SCORE_THRESHOLD = 60;
+
 function matchMessageRule(rule, ctx) {
   if (!rule?.enabled) {
     return {
@@ -374,31 +383,42 @@ function matchMessageRule(rule, ctx) {
       reasonFa: 'قانون پیام خودکار خاموش است',
     };
   }
-  // Scoring not available → refuse auto until configured
-  if (!rule.scoringAvailable && rule.matchScoreThreshold != null) {
-    return {
-      ok: false,
-      reason: 'scoring_unavailable',
-      reasonFa: 'امتیازدهی هنوز فعال نیست — قانون خاموش می‌ماند',
-    };
-  }
-  if (rule.matchScoreThreshold != null) {
-    if (ctx.matchScore == null || Number(ctx.matchScore) < Number(rule.matchScoreThreshold)) {
+  const explicit =
+    rule.matchScoreThreshold != null ||
+    (rule.keywords && rule.keywords.length > 0) ||
+    rule.budgetMin != null ||
+    Boolean(rule.clientStatus);
+  // Chat score = AI confidence × 100 (computed per reply) — no separate scoring profile needed.
+  const threshold =
+    rule.matchScoreThreshold != null
+      ? Number(rule.matchScoreThreshold)
+      : explicit
+        ? null
+        : DEFAULT_MESSAGE_SCORE_THRESHOLD;
+  if (threshold != null) {
+    if (ctx.matchScore == null || !Number.isFinite(Number(ctx.matchScore))) {
+      return {
+        ok: false,
+        reason: 'score_unavailable',
+        reasonFa: 'امتیاز اطمینان این پاسخ در دسترس نیست',
+      };
+    }
+    if (Number(ctx.matchScore) < threshold) {
       return {
         ok: false,
         reason: 'score_below_threshold',
-        reasonFa: 'امتیاز زیر آستانهٔ قانون',
+        reasonFa: 'امتیاز اطمینان زیر آستانهٔ قانون',
       };
     }
   }
   if (rule.keywords?.length) {
-    const text = String(ctx.text || '').toLowerCase();
+    const text = String(ctx.clientText || ctx.text || '').toLowerCase();
     const hit = rule.keywords.some((kw) => text.includes(String(kw).toLowerCase()));
     if (!hit) {
       return {
         ok: false,
         reason: 'keyword_mismatch',
-        reasonFa: 'کلیدواژهٔ قانون تطبیق نکرد',
+        reasonFa: 'کلیدواژهٔ قانون در پیام کارفرما نبود',
       };
     }
   }
@@ -414,19 +434,6 @@ function matchMessageRule(rule, ctx) {
       ok: false,
       reason: 'client_status_mismatch',
       reasonFa: 'وضعیت کارفرما با قانون یکی نیست',
-    };
-  }
-  // If only enabled with empty criteria and no scoring — still require at least one criterion
-  const hasCriterion =
-    rule.matchScoreThreshold != null ||
-    (rule.keywords && rule.keywords.length > 0) ||
-    rule.budgetMin != null ||
-    rule.clientStatus;
-  if (!hasCriterion) {
-    return {
-      ok: false,
-      reason: 'rule_not_configured',
-      reasonFa: 'قانون پیام هنوز پیکربندی نشده',
     };
   }
   return { ok: true };

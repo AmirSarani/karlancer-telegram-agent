@@ -27,6 +27,11 @@ import {
 } from './telegram/scan-notify-dedupe.js';
 import { formatRoomCard, roomCardKeyboard, roomPickKeyboard } from './telegram/room-card.js';
 import { createRoomState } from './agent/room-state.js';
+import {
+  formatMessageSentNotice,
+  formatMessageBlockedNotice,
+  formatBidBlockedNotice,
+} from './telegram/send-notices.js';
 
 async function main() {
   // MCP-only / headless: ENABLE_TELEGRAM=false must not require Telegram token
@@ -374,6 +379,24 @@ async function main() {
 
       if (type === 'messages.polled' && payload) {
         await notifyRoomCards(payload);
+      }
+
+      try {
+        if (type === 'message.sent' && payload) {
+          await notifyAllOwnersChannels(
+            formatMessageSentNotice(payload),
+            payload.roomId ? roomCardKeyboard(payload.roomId) : undefined
+          );
+        } else if (type === 'message.blocked' && payload) {
+          await notifyAllOwnersChannels(
+            formatMessageBlockedNotice(payload),
+            payload.roomId ? roomCardKeyboard(payload.roomId) : undefined
+          );
+        } else if (type === 'bid.blocked' && payload) {
+          await notifyAllOwnersChannels(formatBidBlockedNotice(payload));
+        }
+      } catch (e) {
+        logger.warn('send_notice_failed', { type, err: e.message });
       }
     },
   });
