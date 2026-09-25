@@ -25,7 +25,7 @@ import {
   readLastScanNotifyFingerprint,
   writeLastScanNotifyFingerprint,
 } from './telegram/scan-notify-dedupe.js';
-import { formatRoomCard, roomCardKeyboard, roomPickKeyboard } from './telegram/room-card.js';
+import { formatRoomCard, roomCardKeyboard, roomPickKeyboard, roomPriceKeyboard } from './telegram/room-card.js';
 import { createRoomState } from './agent/room-state.js';
 import {
   formatMessageSentNotice,
@@ -209,6 +209,13 @@ async function main() {
     }
   }
 
+  function roomCardMarkup(card) {
+    if (card.continuumAction === 'price_ask') return roomPriceKeyboard(card.roomId);
+    return card.pickPrompt || card.continuumAction === 'pick_to_answer' || card.continuumAction === 'auto_hitl'
+      ? roomPickKeyboard(card.roomId)
+      : roomCardKeyboard(card.roomId);
+  }
+
   /** Notify owner with full room cards for new inbound messages. */
   const notifiedMsgIds = new Set();
   async function notifyRoomCards(payload) {
@@ -223,7 +230,7 @@ async function main() {
       const action = String(card.continuumAction || '');
       const needsHitl =
         Boolean(card.pickPrompt) ||
-        ['pick_to_answer', 'auto_hitl', 'hitl_emergency', 'scan_hitl'].includes(action);
+        ['pick_to_answer', 'auto_hitl', 'hitl_emergency', 'scan_hitl', 'price_ask'].includes(action);
       // Continuum echo with no new inbound → stay quiet (scan-summary spam spirit)
       if (
         freshN <= 0 &&
@@ -256,10 +263,7 @@ async function main() {
         logger.info('telegram_room_auto_sent', { roomId: card.roomId });
       }
       const text = formatRoomCard(enriched);
-      const markup =
-        card.pickPrompt || card.continuumAction === 'pick_to_answer' || card.continuumAction === 'auto_hitl'
-          ? roomPickKeyboard(card.roomId)
-          : roomCardKeyboard(card.roomId);
+      const markup = roomCardMarkup(card);
       const res = await notifyAllOwners({
         token: config.telegramBotToken,
         chatIds: config.telegramOwnerChatIds || [config.telegramOwnerChatId],
@@ -327,6 +331,7 @@ async function main() {
     api,
     llm,
     budget,
+    gate,
     mutations,
     notifyOpportunity: async (text, meta = {}) => {
       let reply_markup;
@@ -392,6 +397,16 @@ async function main() {
             formatMessageBlockedNotice(payload),
             payload.roomId ? roomCardKeyboard(payload.roomId) : undefined
           );
+        } else if (type === 'chat.price_resumed' && payload?.card) {
+          // Auto-sent → the message.sent notice follows; otherwise show the resulting card.
+          if (payload.card.continuumAction !== 'auto_sent' && config.enableTelegram && config.telegramBotToken) {
+            await notifyAllOwners({
+              token: config.telegramBotToken,
+              chatIds: config.telegramOwnerChatIds || [config.telegramOwnerChatId],
+              text: formatRoomCard(payload.card),
+              reply_markup: roomCardMarkup(payload.card),
+            });
+          }
         } else if (type === 'bid.blocked' && payload) {
           await notifyAllOwnersChannels(formatBidBlockedNotice(payload));
         }

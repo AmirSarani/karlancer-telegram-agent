@@ -7,6 +7,7 @@ export const PRICING_RULES_VERSION = '1.0.0';
 /**
  * @param {{ complexity?: 'low'|'medium'|'high', pages?: number, integrations?: number }} features
  */
+/** All amounts are Toman (Karlancer budgets are in Toman). */
 export function recommendPrice(features = {}) {
   const complexity = features.complexity || 'medium';
   const pages = Number(features.pages) || 5;
@@ -27,7 +28,7 @@ export function recommendPrice(features = {}) {
 
   return {
     rulesVersion: PRICING_RULES_VERSION,
-    currency: 'IRR',
+    currency: 'TOMAN',
     assumptions: [
       'MVP-first; later phases priced separately',
       'No App Store / native iOS unless explicitly in scope',
@@ -38,7 +39,7 @@ export function recommendPrice(features = {}) {
       standard: { amount: standard, label: 'استاندارد' },
       premium: { amount: premium, label: 'پیشرفته' },
     },
-    range: { min: economy, max: premium, currency: 'IRR' },
+    range: { min: economy, max: premium, currency: 'TOMAN' },
     confidence,
     risk: complexity === 'high' ? 'elevated' : 'normal',
     reason: `base[${complexity}] + pages/integrations factors`,

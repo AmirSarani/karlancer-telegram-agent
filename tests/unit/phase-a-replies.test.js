@@ -188,10 +188,12 @@ function autoSetup({ llm, configured = true }) {
   return { db, c, roomState };
 }
 
+// Budgeted project so these tests exercise reply safety, not the Phase C price question.
 const card = (text) => ({
   roomId: '77',
   guestName: 'مریم',
   clientUserId: '502998',
+  project: { title: 'فروشگاه لوازم آرایشی', minBudget: 20_000_000, maxBudget: 30_000_000 },
   messages: [{ id: '1', text, isOwn: false, createdAt: '2026-09-25T10:00:00Z' }],
   freshInboundCount: 1,
 });
@@ -206,7 +208,7 @@ test('full_auto never auto-sends the deterministic fallback', async () => {
 
 test('full_auto low confidence → owner card', async () => {
   const { c } = autoSetup({ llm: mockLlm({ conf: 0.3 }) });
-  const out = await c.processInboundCard(card(CLIENT));
+  const out = await c.processInboundCard({ ...card('ممنون، فایل‌ها را فرستادم.'), project: null });
   assert.equal(out.gateVerdict.reason, 'low_confidence');
 });
 

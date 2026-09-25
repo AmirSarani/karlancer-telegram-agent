@@ -8,6 +8,8 @@ import { bidIdempotencyKey } from '../api/contracts/verified-mutation.js';
 import { createRoomState } from '../agent/room-state.js';
 import { runMessagesPoll } from '../agent/messages-poll.js';
 import { createScanPrepare } from '../agent/scan-prepare.js';
+import { createChatContinuum } from '../agent/chat-continuum.js';
+import { extractPriceFeatures, extractSentPrice, recordPriceSample } from '../agent/price-memory.js';
 import { createOpportunityScanner } from '../opportunity/scanner.js';
 
 /**
@@ -537,6 +539,25 @@ export async function handleJob(ctx, job) {
         });
         return { ok: false, errorCode: 'needs_reconciliation', detail: data, terminal: true };
       }
+      // Learn: price actually sent in chat (Toman) with room features.
+      let sentPrice = null;
+      if (roomId && !p.followUp) {
+        try {
+          sentPrice = extractSentPrice(p.text);
+          if (sentPrice) {
+            const rc = roomState.getCard(roomId) || {};
+            recordPriceSample(db, {
+              amount: sentPrice,
+              source: 'sent',
+              roomId,
+              projectId: rc.project?.id ?? null,
+              features: extractPriceFeatures({ project: rc.project || null, messages: rc.messages || [] }),
+            });
+          }
+        } catch (e) {
+          logger.warn('price_sample_record_failed', { err: e.message });
+        }
+      }
       if (roomId) {
         roomState.markAnswered(roomId, {
           lastSentText: p.text,
@@ -554,9 +575,30 @@ export async function handleJob(ctx, job) {
         auto: isAuto,
         followUp: Boolean(p.followUp),
         textPreview: String(p.text || '').slice(0, 160),
-        price: p.price ?? null,
+        price: sentPrice ?? p.price ?? null,
       });
       return { ok: true, result: data };
+    }
+
+    case 'chat.resume_price': {
+      // Owner answered «چه قیمتی بدهم؟» → continue the auto path (same gate / mutation contract).
+      const roomState = createRoomState(db);
+      const continuum = createChatContinuum({
+        db,
+        roomState,
+        llm: ctx.llm || null,
+        gate: ctx.gate || null,
+        mutations: ctx.mutations || null,
+        budget: ctx.budget || null,
+        getAllowLiveAutoSend:
+          typeof ctx.getAllowLiveAutoSend === 'function'
+            ? ctx.getAllowLiveAutoSend
+            : () => Boolean(ctx.allowLiveAutoSend),
+      });
+      const out = await continuum.resumeAfterPrice(p.roomId);
+      if (!out.ok) return { ok: false, errorCode: out.reason, detail: {}, terminal: true };
+      await emit(ctx, 'chat.price_resumed', { roomId: String(p.roomId), card: out.card });
+      return { ok: true, result: { roomId: String(p.roomId), action: out.card?.continuumAction } };
     }
 
     case 'project.analyze': {

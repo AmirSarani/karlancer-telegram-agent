@@ -490,7 +490,7 @@ export function pickRoomsToPrepare(priorityRooms = [], matched = [], max = SCAN_
 }
 
 /** Chat-continuum actions that already produced a card / send for the latest inbound. */
-const CONTINUUM_HANDLED = new Set(['auto_hitl', 'pick_to_answer', 'auto_sent', 'hitl_emergency', 'scan_hitl']);
+const CONTINUUM_HANDLED = new Set(['auto_hitl', 'pick_to_answer', 'auto_sent', 'hitl_emergency', 'scan_hitl', 'price_ask']);
 
 /**
  * Why scan-prepare should NOT draft this room (null → prepare).

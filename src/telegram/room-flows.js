@@ -3,6 +3,14 @@
  * Sending is API-driven via VerifiedMutationContract — never LLM.
  */
 import crypto from 'node:crypto';
+import {
+  extractPriceFeatures,
+  getRoomPriceAnswer,
+  getRoomPriceAsk,
+  parseTomanAmount,
+  recordPriceSample,
+  setRoomPriceAnswer,
+} from '../agent/price-memory.js';
 import { createRoomState } from '../agent/room-state.js';
 import { adaptDraftWithNote, analyzeRoomWithLlm } from '../agent/analyze-llm.js';
 import { getVerifiedMutation } from '../api/contracts/verified-mutation.js';
@@ -643,6 +651,76 @@ export function createRoomFlows(deps) {
     );
   }
 
+  // —— Phase C: «چه قیمتی بدهم؟» ——
+
+  function formatTomanFa(n) {
+    return `${Number(n).toLocaleString('fa-IR')} تومان`;
+  }
+
+  async function applyOwnerPrice(ctx, roomId, amount, source) {
+    const ask = getRoomPriceAsk(db, roomId);
+    const card = roomState.getCard(roomId) || {};
+    setRoomPriceAnswer(db, roomId, { amount, source });
+    try {
+      recordPriceSample(db, {
+        amount,
+        source,
+        roomId,
+        projectId: card.project?.id ?? null,
+        features: ask?.features || extractPriceFeatures({ project: card.project || null, messages: card.messages || [] }),
+      });
+    } catch {
+      /* learning is best effort */
+    }
+    roomState.setThread(roomId, { suggestedPrice: amount });
+    let queued = false;
+    if (queue) {
+      queue.create({
+        goal: 'chat.resume_price',
+        requestedBy: `telegram:${ctx.from?.id}`,
+        payload: { roomId: String(roomId) },
+      });
+      queued = true;
+    }
+    await editOrReply(
+      ctx,
+      [
+        `✅ قیمت ${formatTomanFa(amount)} ثبت شد.`,
+        queued
+          ? 'پاسخ با همین قیمت آماده می‌شود؛ اگر قوانین خودکار اجازه بدهد ارسال می‌شود، وگرنه برای تأیید شما می‌آید.'
+          : 'از «📝 پیش‌نویس» پاسخ را با همین قیمت آماده کنید.',
+        'این قیمت برای قیمت‌گذاری کارهای مشابه بعدی هم یاد گرفته شد.',
+      ].join('\n'),
+      { reply_markup: roomCardKeyboard(roomId) },
+      { edit: Boolean(ctx.callbackQuery) }
+    );
+  }
+
+  async function acceptSuggestedPrice(ctx, roomId) {
+    const ask = getRoomPriceAsk(db, roomId);
+    if (!ask?.suggested) {
+      const done = getRoomPriceAnswer(db, roomId);
+      await editOrReply(
+        ctx,
+        done
+          ? `قیمت این گفتگو قبلاً ثبت شده: ${formatTomanFa(done.amount)}`
+          : 'پیشنهادی برای این گفتگو ثبت نشده؛ «✏️ مبلغ دیگر» را بزنید.',
+        { reply_markup: roomCardKeyboard(roomId) },
+        { edit: false }
+      );
+      return;
+    }
+    await applyOwnerPrice(ctx, roomId, Number(ask.suggested), 'owner_approved');
+  }
+
+  async function startPriceEntry(ctx, roomId) {
+    roomState.setAwaitingPrice(ctx.from?.id, roomId);
+    await ctx.reply(
+      'مبلغ را به تومان بفرستید؛ مثلاً «۲۵ میلیون» یا «۲۵۰۰۰۰۰۰».\nلغو: /cancel',
+      menuOpts()
+    );
+  }
+
   /** Owner picked «جواب بدم» → open draft / confirm path */
   async function acceptPick(ctx, roomId) {
     roomState.setDecision(roomId, { status: 'pending', detail: 'picked_to_answer' });
@@ -680,6 +758,30 @@ export function createRoomFlows(deps) {
     handleNoteText,
     runAiAnalyze,
     sendApiLive,
+    acceptSuggestedPrice,
+    startPriceEntry,
+    applyOwnerPrice,
+    /**
+     * Handle free-text amount if awaiting a price answer; returns true if consumed.
+     */
+    async maybeHandleAwaitingPrice(ctx) {
+      const roomId = roomState.getAwaitingPrice(ctx.from?.id);
+      if (!roomId) return false;
+      const text = (ctx.message?.text || '').trim();
+      if (text === '/cancel') {
+        roomState.clearAwaitingPrice(ctx.from?.id);
+        await ctx.reply('لغو شد.', menuOpts());
+        return true;
+      }
+      const amount = parseTomanAmount(text);
+      if (!amount) {
+        await ctx.reply('مبلغ را متوجه نشدم. به تومان بفرستید؛ مثلاً «۲۵ میلیون». لغو: /cancel', menuOpts());
+        return true;
+      }
+      roomState.clearAwaitingPrice(ctx.from?.id);
+      await applyOwnerPrice(ctx, roomId, amount, 'owner_answer');
+      return true;
+    },
     /**
      * Handle free-text if awaiting note; returns true if consumed.
      */
