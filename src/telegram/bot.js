@@ -1138,7 +1138,10 @@ async function replyMode(ctx, { edit = false } = {}) {
   bot.command('cancel', async (ctx) => {
     if (await denyIfNotOwner(ctx)) return;
     touch();
-    if (roomFlows) roomFlows.roomState.clearAwaitingNote(ctx.from?.id);
+    if (roomFlows) {
+      roomFlows.roomState.clearAwaitingNote(ctx.from?.id);
+      roomFlows.roomState.clearAwaitingPrice(ctx.from?.id);
+    }
     if (wizard) wizard.clear(ctx.from?.id);
     if (getReloginState(ctx.chat?.id)) {
       clearReloginState(ctx.chat.id);
@@ -1165,6 +1168,7 @@ async function replyMode(ctx, { edit = false } = {}) {
     if (await denyIfNotOwner(ctx)) return;
     touch();
     if (roomFlows && (await roomFlows.maybeHandleAwaitingNote(ctx))) return;
+    if (roomFlows && (await roomFlows.maybeHandleAwaitingPrice(ctx))) return;
 
     if (wizard && (await maybeHandleWizardText(ctx))) return;
 
@@ -2456,6 +2460,18 @@ if (parsed.type === 'set_mode') {
       await ctx.answerCallbackQuery({ text: 'انتخاب شد' });
       if (!roomFlows) return;
       await roomFlows.acceptPick(ctx, parsed.roomId);
+      return;
+    }
+    if (parsed.type === 'room_price_ok') {
+      await ctx.answerCallbackQuery({ text: 'ثبت شد' });
+      if (!roomFlows) return;
+      await roomFlows.acceptSuggestedPrice(ctx, parsed.roomId);
+      return;
+    }
+    if (parsed.type === 'room_price_set') {
+      await ctx.answerCallbackQuery();
+      if (!roomFlows) return;
+      await roomFlows.startPriceEntry(ctx, parsed.roomId);
       return;
     }
     if (parsed.type === 'room_skip') {

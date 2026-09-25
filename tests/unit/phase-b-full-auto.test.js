@@ -65,6 +65,7 @@ function autoSetup({ llm = mockLlm(), rule = { enabled: true }, preview = 0, bud
 const CLIENT = 'سلام، یک سایت فروشگاهی با درگاه پرداخت می‌خواهم. هزینه و زمان تحویل چقدر است؟';
 const card = (text = CLIENT, roomId = '77') => ({
   roomId,
+  project: { title: 'فروشگاه', minBudget: 20_000_000, maxBudget: 30_000_000 },
   guestName: 'مریم',
   clientUserId: '502998',
   messages: [{ id: '1', text, isOwn: false, createdAt: '2026-09-25T10:00:00Z' }],

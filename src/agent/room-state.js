@@ -182,6 +182,26 @@ export function createRoomState(db) {
       return row?.value?.roomId ? String(row.value.roomId) : null;
     },
 
+    setAwaitingPrice(userId, roomId) {
+      return kvSet(db, `tg:awaiting_price:${userId}`, { roomId: String(roomId), at: nowIso() });
+    },
+
+    getAwaitingPrice(userId) {
+      const row = kvGet(db, `tg:awaiting_price:${userId}`);
+      if (!row?.value?.roomId) return null;
+      // stale after 1h
+      if (Date.now() - Date.parse(row.value.at || 0) > 3_600_000) return null;
+      return String(row.value.roomId);
+    },
+
+    clearAwaitingPrice(userId) {
+      try {
+        db.prepare(`DELETE FROM kv WHERE key = ?`).run(`tg:awaiting_price:${userId}`);
+      } catch {
+        /* ignore */
+      }
+    },
+
     clearAwaitingNote(userId) {
       try {
         db.prepare(`DELETE FROM kv WHERE key = ?`).run(awaitingNoteKey(userId));

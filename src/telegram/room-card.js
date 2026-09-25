@@ -188,7 +188,7 @@ export function roomsListKeyboard(pageRooms, { page = 1, totalPages = 1, unreadO
 export function parseRoomCallback(data) {
   if (typeof data !== 'string' || !data) return null;
   const m =
-    /^room:(ai|ccl|cfm|dft|done|msg|no|note|ok|open|pick|ref|rgn|rule|skip|snd|tch):([0-9A-Za-z_-]{1,24})$/.exec(
+    /^room:(ai|ccl|cfm|dft|done|msg|no|note|ok|open|pick|pok|pset|ref|rgn|rule|skip|snd|tch):([0-9A-Za-z_-]{1,24})$/.exec(
       data
     );
   if (!m) return null;
@@ -210,6 +210,8 @@ export function parseRoomCallback(data) {
     rgn: 'room_regen',
     snd: 'room_send',
     rule: 'room_auto_rule',
+    pok: 'room_price_ok',
+    pset: 'room_price_set',
   };
   return { type: map[m[1]], roomId: m[2] };
 }
@@ -304,6 +306,54 @@ export function formatRoomsList(
  * User View — clean Persian card (default). No IDs / slugs / API dump.
  * @param {object} card
  */
+function priceBasisFa(n, source) {
+  const k = Number(n) || 0;
+  if (source === 'owner_answer') return ' (قیمتی که خودتان دادید)';
+  if (k > 0) return ` (بر اساس ${toFaDigits(k)} قیمت قبلی)`;
+  return '';
+}
+
+function toFaDigits(v) {
+  return String(v).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]);
+}
+
+/**
+ * «چه قیمتی بدهم؟» section for a room card.
+ * @param {{ suggestedFa?: string, basedOnN?: number, firstTimeType?: boolean, reason?: string }} ask
+ */
+export function formatPriceAskLines(ask = {}) {
+  const lines = ['', '💰 چه قیمتی بدهم؟'];
+  if (ask.suggestedFa) {
+    lines.push(`• پیشنهاد من: ${ask.suggestedFa}`);
+  }
+  const n = Number(ask.basedOnN) || 0;
+  if (n > 0) lines.push(`• بر اساس ${toFaDigits(n)} قیمت قبلی در کارهای مشابه`);
+  else lines.push('• کار مشابهی با قیمت ثبت‌شده ندارم؛ پیشنهاد از قواعد قیمت‌گذاری است.');
+  lines.push(
+    ask.reason === 'low_confidence'
+      ? '• چون از برآورد مطمئن نیستم، قیمت را از شما می‌پرسم.'
+      : '• کارفرما بودجه مشخص نکرده، قیمت را از شما می‌پرسم.'
+  );
+  lines.push('', '«✅ همین قیمت» را بزنید یا «✏️ مبلغ دیگر» و مبلغ را به تومان بفرستید. بعد از آن پاسخ با همین قیمت آماده می‌شود.');
+  return lines;
+}
+
+/**
+ * Keyboard for the price question card.
+ * @param {string|number} roomId
+ */
+export function roomPriceKeyboard(roomId) {
+  const id = String(roomId);
+  return addPairs(new InlineKeyboard(), [
+    ['✅ همین قیمت', `room:pok:${id}`],
+    ['✏️ مبلغ دیگر', `room:pset:${id}`],
+    ['👁 مشاهده', `room:msg:${id}`],
+    ['⏭ بعداً', `room:skip:${id}`],
+    ['⬅️ گفتگوها', 'goto:chats'],
+    ['🏠 خانه', 'nav:home'],
+  ]);
+}
+
 export function formatRoomCard(card = {}) {
   const guest = card.guestName || card.guest_name || '—';
   const unread = card.unread != null ? Number(card.unread) : null;
@@ -356,14 +406,17 @@ export function formatRoomCard(card = {}) {
   if (card.analysisSummary) {
     lines.push('', '🧠 خلاصه AI', truncatePersianText(String(card.analysisSummary), { max: 220, lines: 3 }));
   }
-  if (card.suggestedPriceFa) {
-    lines.push(`• قیمت پیشنهادی (داخلی): ${card.suggestedPriceFa}`);
+  if (card.suggestedPriceFa && !card.priceAsk) {
+    lines.push(`• قیمت پیشنهادی (داخلی): ${card.suggestedPriceFa}${priceBasisFa(card.priceBasedOnN, card.priceSource)}`);
   }
   if (card.pickPrompt && card.gateVerdict?.reasonFa) {
     lines.push(`• چرا خودکار نفرستادم: ${truncatePersianText(String(card.gateVerdict.reasonFa), { max: 140, lines: 2 })}`);
   }
   if (card.pickPrompt) {
     lines.push('', '❓ جواب بدم؟ از دکمه‌ها یکی را انتخاب کنید.');
+  }
+  if (card.priceAsk) {
+    lines.push(...formatPriceAskLines(card.priceAsk));
   }
 
   const msgBlock = formatLastMessagesBlock(messages, { max: 5 });

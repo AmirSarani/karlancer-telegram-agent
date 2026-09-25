@@ -11,7 +11,8 @@
 import { analyzeRoomWithLlm, adaptDraftWithNote } from './analyze-llm.js';
 import { cleanHumanReply } from './reply-clean.js';
 import { buildDraftReply } from './draft-api.js';
-import { suggestChatPrice } from './chat-price.js';
+import { decideChatPrice } from './chat-price.js';
+import { setRoomPriceAsk } from './price-memory.js';
 import {
   buildConversationHistory,
   latestClientTurn,
@@ -86,19 +87,7 @@ export function createChatContinuum(deps) {
 
     roomState.touchInbound(roomId);
 
-    const price = suggestChatPrice(card.project || {}, scoringProfile || {});
-    const base = {
-      roomId,
-      mode,
-      modeFa: CHAT_AI_MODE_LABELS_FA[mode] || mode,
-      isContinuum,
-      price,
-      analysis: null,
-      draftText: card.draftText || roomState.getDraft(roomId)?.text || '',
-      continuumAction: 'notify',
-      autoSend: null,
-      pickPrompt: false,
-    };
+    const base = buildBase(card, roomId, mode, isContinuum);
 
     if (mode === 'full_manual') {
       return finalizeManual(card, base, threadBefore);
@@ -113,6 +102,45 @@ export function createChatContinuum(deps) {
     }
 
     return finalizeManual(card, base, threadBefore);
+  }
+
+  function buildBase(card, roomId, mode, isContinuum) {
+    let clientText = '';
+    try {
+      clientText = latestClientTurn(buildConversationHistory(card.messages || [])).join('\n');
+    } catch {
+      clientText = '';
+    }
+    const price = decideChatPrice({ db, card: { ...card, roomId }, clientText, scoringProfile: scoringProfile || {} });
+    return {
+      roomId,
+      mode,
+      modeFa: CHAT_AI_MODE_LABELS_FA[mode] || mode,
+      isContinuum,
+      price,
+      analysis: null,
+      draftText: card.draftText || roomState.getDraft(roomId)?.text || '',
+      continuumAction: 'notify',
+      autoSend: null,
+      pickPrompt: false,
+    };
+  }
+
+  /**
+   * Owner answered «چه قیمتی بدهم؟» → continue the auto path for this room with that price.
+   * Still goes through the same safety checks + PermissionGate + mutation requester.
+   */
+  async function resumeAfterPrice(roomIdIn) {
+    const roomId = String(roomIdIn);
+    const card = roomState.getCard(roomId);
+    if (!card) return { ok: false, reason: 'no_card' };
+    const settings = settingsStore?.get?.() || { chatAiMode: 'full_manual' };
+    if (settings.chatAiMode !== 'full_auto') return { ok: false, reason: 'mode_not_auto' };
+    const threadBefore = roomState.getThread(roomId);
+    const isContinuum = Boolean(threadBefore.lastSentAt);
+    const base = buildBase(card, roomId, 'full_auto', isContinuum);
+    const out = await finalizeAuto({ ...card, draftText: null }, base, threadBefore, settings, { resumed: true });
+    return { ok: true, card: out };
   }
 
   async function finalizeManual(card, base, threadBefore) {
@@ -175,7 +203,7 @@ export function createChatContinuum(deps) {
     return enriched;
   }
 
-  async function finalizeAuto(card, base, threadBefore, settings) {
+  async function finalizeAuto(card, base, threadBefore, settings, autoOpts = {}) {
     if (settings.emergencyStop) {
       const fallback = await finalizePick(card, { ...base, mode: 'pick_to_answer' }, threadBefore);
       return { ...fallback, continuumAction: 'hitl_emergency', pickPrompt: true };
@@ -212,6 +240,10 @@ export function createChatContinuum(deps) {
     };
 
     const safety = autoSafetyCheck(pipe, settings);
+
+    if (shouldAskOwnerPrice({ price: base.price, pipe, safety, card, isContinuum: base.isContinuum })) {
+      return finalizePriceAsk(card, base, pipe);
+    }
 
     let verdict = null;
     if (gate && !safety) {
@@ -438,6 +470,36 @@ export function createChatContinuum(deps) {
     };
   }
 
+  function finalizePriceAsk(card, base, pipe) {
+    const price = base.price || {};
+    if (db) {
+      setRoomPriceAsk(db, base.roomId, {
+        suggested: price.amount ?? null,
+        basedOnN: price.basedOnN || 0,
+        source: price.source || null,
+        features: price.features || null,
+      });
+    }
+    roomState.setDecision(base.roomId, { status: 'pending', detail: 'price_ask' });
+    const enriched = enrichCard(card, {
+      ...base,
+      analysis: pipe.analysis,
+      draftText: pipe.draftText,
+      continuumAction: 'price_ask',
+      pickPrompt: false,
+      llmUsed: pipe.llmUsed,
+      priceAsk: {
+        suggested: price.amount ?? null,
+        suggestedFa: price.labelFa ?? null,
+        basedOnN: price.basedOnN || 0,
+        firstTimeType: Boolean(price.firstTimeType),
+        reason: price.needsOwnerPrice ? 'no_budget' : 'low_confidence',
+      },
+    });
+    roomState.setCard(base.roomId, enriched);
+    return enriched;
+  }
+
   function threadContext(thread) {
     if (!thread) return null;
     return {
@@ -463,6 +525,9 @@ export function createChatContinuum(deps) {
       pickPrompt: Boolean(extra.pickPrompt),
       suggestedPrice: extra.price?.amount ?? null,
       suggestedPriceFa: extra.price?.labelFa ?? null,
+      priceSource: extra.price?.source ?? null,
+      priceBasedOnN: extra.price?.basedOnN || 0,
+      priceAsk: extra.priceAsk || null,
       analysisSummary: extra.analysis?.summary || extra.lightSummary || null,
       llmUsed: Boolean(extra.llmUsed),
       autoSend: extra.autoSend || null,
@@ -495,10 +560,29 @@ export function createChatContinuum(deps) {
   return {
     processInboundCard,
     processPollCards,
+    resumeAfterPrice,
     getMode() {
       return settingsStore?.get?.()?.chatAiMode || 'full_manual';
     },
   };
+}
+
+const HARD_SAFETY = new Set(['token_budget_exceeded', 'llm_fallback', 'analysis_unavailable', 'no_client_text']);
+
+/**
+ * Ask the owner «چه قیمتی بدهم؟» before auto-answering?
+ * Only when the price matters in this reply (client asked price/discount, or first reply on a project),
+ * the price is not the owner's own answer nor confidently learned, and either there is no budget
+ * (or no similar past price) or analysis confidence is low.
+ */
+export function shouldAskOwnerPrice({ price, pipe, safety, card, isContinuum }) {
+  if (!price) return false;
+  if (price.source === 'owner_answer' || price.source === 'learned') return false;
+  if (safety && HARD_SAFETY.has(safety.reason)) return false;
+  const neg = pipe?.negotiation || {};
+  const relevant = Boolean(neg.askedPrice || neg.askedDiscount || (card?.project && !isContinuum));
+  if (!relevant) return false;
+  return Boolean(price.needsOwnerPrice) || safety?.reason === 'low_confidence';
 }
 
 /**

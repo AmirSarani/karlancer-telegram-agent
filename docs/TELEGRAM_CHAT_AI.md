@@ -119,3 +119,22 @@ Modules: `src/agent/scan-prepare.js`, `src/worker/handlers.js` (`rooms.scan` / `
   when `DAILY_TOKEN_LIMIT` is exhausted the LLM is skipped and full-auto routes to the owner
   (`token_budget_exceeded`).
 - Room cards show «📤 در حال ارسال» and «چرا خودکار نفرستادم: …».
+
+## Phase C — pricing (2026-09)
+
+- **Unit:** every amount is **Toman** (Karlancer budgets are Toman). `recommendPrice` / LLM schema /
+  deterministic ranges now say `TOMAN`; cards and prompts show «تومان».
+- **Price decision** (`decideChatPrice` in `src/agent/chat-price.js`): owner's answer for this room →
+  confident learned median (≥ 5 similar samples, IQR/median ≤ 0.35) → project budget (nudged toward the
+  learned median when ≥ 3 samples) → learned median (uncertain) → pricing rules.
+- **«چه قیمتی بدهم؟»** (full_auto): when the price matters (client asked price/discount, or first reply on
+  a project) and the price is not the owner's answer / confidently learned, and there is no budget
+  (includes first-time project types) or analysis confidence is low → room card with the suggestion,
+  «بر اساس N قیمت قبلی» and buttons «✅ همین قیمت» (`room:pok`) / «✏️ مبلغ دیگر» (`room:pset`, owner
+  replies e.g. «۲۸ میلیون»). The answer is stored (kv `room:<id>:price_answer`, 30 days) and a
+  `chat.resume_price` job continues the auto path with that price (same safety checks, gate, mutation
+  contract; live send still needs `ALLOW_LIVE_AUTO_SEND`).
+- **Learning** (`src/agent/price-memory.js`, table `price_samples`): owner answers/approvals and prices
+  actually sent (parsed from the sent text after POST success) with features (category, keyword tags,
+  scope, days). Deduped per room + amount.
+- Fix: the production worker now receives the PermissionGate (without it full-auto always fell back to HITL).

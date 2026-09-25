@@ -18,7 +18,7 @@ export const ProjectAnalysisSchema = z.object({
   price_range: z.object({
     min: z.number(),
     max: z.number(),
-    currency: z.string().default('IRR'),
+    currency: z.string().default('TOMAN'),
   }),
   risks: z.array(z.string()).default([]),
   confidence: z.number().min(0).max(1),
@@ -284,7 +284,7 @@ function deterministicAnalyze(project) {
     missing_information: desc.length < 50 ? ['detailed requirements'] : [],
     complexity,
     estimated_days: days,
-    price_range: { min: days * 1_000_000, max: days * 3_000_000, currency: 'IRR' },
+    price_range: { min: days * 1_000_000, max: days * 3_000_000, currency: 'TOMAN' },
     risks: ['incomplete brief'],
     confidence: desc.length > 100 ? 0.45 : 0.25,
     evidence: ['deterministic_heuristic'],
