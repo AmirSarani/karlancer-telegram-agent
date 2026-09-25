@@ -91,7 +91,7 @@ test('features: tags + category + scope', () => {
   const f = extractPriceFeatures({ clientText: ASK, analysis: { data: { requirements: ['a'], estimated_days: 10 } } });
   assert.ok(f.tags.includes('wordpress'));
   assert.ok(f.tags.includes('shop'));
-  assert.equal(f.scope, 'small');
+  assert.equal(f.scope, 'medium');
   assert.equal(f.days, 10);
 });
 

@@ -11,6 +11,7 @@ import { createScanPrepare } from '../agent/scan-prepare.js';
 import { createChatContinuum } from '../agent/chat-continuum.js';
 import { runFollowUpScan } from '../agent/follow-up.js';
 import { runWinWatch } from '../agent/win-watch.js';
+import { crawlPastPrices } from '../agent/price-crawl.js';
 import { extractPriceFeatures, extractSentPrice, recordPriceSample } from '../agent/price-memory.js';
 import { createOpportunityScanner } from '../opportunity/scanner.js';
 
@@ -611,6 +612,20 @@ export async function handleJob(ctx, job) {
       });
       for (const win of out.wins) await emit(ctx, 'post_win.detected', win);
       return { ok: true, result: { wins: out.wins.length, checked: out.checked, baseline: out.baseline } };
+    }
+
+    case 'pricing.crawl': {
+      // READ-ONLY: learn the owner's past bid / chat prices as pricing seed samples (idempotent).
+      if (!api?.client?.hasAuth) return { ok: false, errorCode: 'missing_auth', detail: {} };
+      const out = await crawlPastPrices({
+        db,
+        api,
+        maxBidPages: Number(p.maxBidPages) || 40,
+        maxRooms: Number(p.maxRooms) || 150,
+        delayMs: p.delayMs != null ? Number(p.delayMs) : 700,
+      });
+      await emit(ctx, 'pricing.crawled', { bids: out.bids, chat: out.chat, errors: out.errors });
+      return { ok: out.ok, result: { bids: out.bids, chat: out.chat, errors: out.errors } };
     }
 
     case 'chat.resume_price': {

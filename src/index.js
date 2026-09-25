@@ -34,6 +34,7 @@ import {
   formatFollowUpNotice,
 } from './telegram/send-notices.js';
 import { formatWinNotice } from './agent/win-watch.js';
+import { formatPriceCrawlNotice } from './agent/price-crawl.js';
 
 async function main() {
   // MCP-only / headless: ENABLE_TELEGRAM=false must not require Telegram token
@@ -420,6 +421,8 @@ async function main() {
               reply_markup: roomCardMarkup(payload.card),
             });
           }
+        } else if (type === 'pricing.crawled' && payload) {
+          await notifyAllOwnersChannels(formatPriceCrawlNotice(payload));
         } else if (type === 'bid.blocked' && payload) {
           await notifyAllOwnersChannels(formatBidBlockedNotice(payload));
         }

@@ -528,6 +528,29 @@ export function createControlHandlers(deps) {
           { edit }
         );
       },
+      wiz_price_sync: async () => {
+        // READ-ONLY crawl of past bid / chat prices, run by the worker (idempotent, safe to repeat).
+        const q = hooks.queue || null;
+        let queued = false;
+        if (q && typeof q.create === 'function') {
+          const running = (q.list?.({ status: 'queued', limit: 100 }) || []).some((j) => j.goal === 'pricing.crawl');
+          if (!running) q.create({ goal: 'pricing.crawl', requestedBy: `telegram:${ctx.from?.id}`, payload: {} });
+          queued = true;
+        }
+        await editOrReply(
+          ctx,
+          queued
+            ? [
+                '🔄 یادگیری از قیمت‌های قبلی شروع شد',
+                '',
+                'پیشنهادهای قبلی شما و قیمت‌هایی که در گفتگوها نوشته‌اید آرام و بدون هیچ تغییری در کارلنسر خوانده می‌شوند.',
+                'چند دقیقه طول می‌کشد؛ وقتی تمام شد خلاصه‌اش را می‌فرستم. دوباره زدن این دکمه مشکلی ندارد و چیزی تکراری ثبت نمی‌شود.',
+              ].join('\n')
+            : 'الان صف کارها در دسترس نیست؛ کمی بعد دوباره امتحان کنید.',
+          { reply_markup: new InlineKeyboard().text('⬅️ قوانین', 'nav:rules') },
+          { edit }
+        );
+      },
       wiz_bl_rooms: async () => {
         if (wizard) wizard.set(ctx.from?.id, { kind: 'bl_rooms' });
         await editOrReply(

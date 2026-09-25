@@ -142,8 +142,11 @@ export function evaluateDiscount(neg, limits = {}) {
   const maxPct = Number.isFinite(Number(limits.maxDiscountPct)) ? Number(limits.maxDiscountPct) : 10;
   const base = Number(limits.basePrice) > 0 ? Number(limits.basePrice) : null;
   const floor = Number(limits.priceFloorToman) > 0 ? Number(limits.priceFloorToman) : null;
+  // Discount is relative to THIS job's own price. The optional global floor only protects jobs that
+  // are priced above it, so a small cheap job (e.g. ~1M Toman) is never pushed up or rejected by it.
+  const floorApplies = floor != null && base != null && base >= floor;
   let minPrice = base != null ? Math.round(base * (1 - maxPct / 100)) : null;
-  if (floor != null) minPrice = minPrice != null ? Math.max(minPrice, floor) : floor;
+  if (floorApplies) minPrice = Math.max(minPrice, floor);
   if (!neg?.askedDiscount) {
     return { allowed: true, needsOwner: false, reason: null, maxPct, minPrice };
   }
@@ -153,7 +156,7 @@ export function evaluateDiscount(neg, limits = {}) {
   if (neg.requestedPct != null && neg.requestedPct > maxPct) {
     return { allowed: false, needsOwner: true, reason: 'discount_over_limit', maxPct, minPrice };
   }
-  if (base != null && floor != null && neg.requestedPct != null) {
+  if (base != null && floorApplies && neg.requestedPct != null) {
     const asked = Math.round(base * (1 - neg.requestedPct / 100));
     if (asked < floor) {
       return { allowed: false, needsOwner: true, reason: 'below_price_floor', maxPct, minPrice };
