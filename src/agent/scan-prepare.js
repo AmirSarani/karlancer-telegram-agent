@@ -13,6 +13,8 @@ import { cleanHumanReply } from './reply-clean.js';
 import { buildDraftReply } from './draft-api.js';
 import { suggestChatPrice } from './chat-price.js';
 import { extractProjectSlug } from './message-normalize.js';
+import { markOwnMessages, sortChronological } from './conversation.js';
+import { getOwnUserId } from './own-identity.js';
 import { createRoomState } from './room-state.js';
 import { createAgentSettingsStore } from '../telegram/agent-settings.js';
 import { buildSmartBid } from '../opportunity/smart-bid.js';
@@ -177,7 +179,8 @@ export function createScanPrepare(deps) {
   async function prepareRoomReply(roomHint, invite) {
     const roomId = String(roomHint.roomId ?? roomHint.id);
     const data = await api.messages.list(roomId, { page: 1 });
-    const messages = data.messages || [];
+    const ownUserId = await getOwnUserId({ api, db }).catch(() => null);
+    const messages = sortChronological(markOwnMessages(data.messages || [], ownUserId));
     const guestName =
       data.roomMeta?.guestName ||
       roomHint.guest_name ||
@@ -213,7 +216,7 @@ export function createScanPrepare(deps) {
       roomId,
       guestName,
       project,
-      messages: messages.slice(-8),
+      messages: messages.slice(-12),
       projectTitle: project?.title,
     };
 
@@ -226,17 +229,14 @@ export function createScanPrepare(deps) {
 
     const existingNote = roomState.getNote(roomId)?.text || '';
     const thread = roomState.getThread(roomId);
-    const ownerNoteParts = [];
-    if (existingNote) ownerNoteParts.push(existingNote);
-    if (thread?.lastSentText) {
-      ownerNoteParts.push(`پیام قبلی ما: ${String(thread.lastSentText).slice(0, 400)}`);
+    const internal = [];
+    if (analysis?.data?.estimated_days) {
+      internal.push(`زمان تخمینی تحلیل: حدود ${Number(analysis.data.estimated_days).toLocaleString('fa-IR')} روز کاری.`);
     }
     if (price?.amount) {
-      ownerNoteParts.push(
-        `قیمت پیشنهادی داخلی: ${price.labelFa} (در متن نیاور مگر کارفرما بپرسد).`
-      );
+      internal.push(`قیمت پیشنهادی داخلی: ${price.labelFa} (در متن نیاور مگر کارفرما بپرسد).`);
     }
-    ownerNoteParts.push('پاسخ را کوتاه، انسانی و فارسی بنویس.');
+    internal.push('پاسخ را کوتاه، انسانی و فارسی بنویس.');
 
     const template = buildDraftReply({
       ...roomContext,
@@ -248,9 +248,12 @@ export function createScanPrepare(deps) {
     const adapted = await adaptDraftWithNote({
       roomContext,
       currentDraft: roomState.getDraft(roomId)?.text || template.text,
-      ownerNote: ownerNoteParts.join('\n'),
+      ownerNote: existingNote,
+      internalNote: internal.join('\n'),
       llm,
       mode: 'analyze',
+      analysis,
+      pricing: price?.amount ? { amount: price.amount, currency: 'تومان', labelFa: price.labelFa } : null,
     });
 
     const draftText = cleanHumanReply(adapted.text || template.text);

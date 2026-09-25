@@ -155,7 +155,22 @@ export function normalizeInboundMessage(raw) {
     projectId,
     projectSlug: slug,
     userId:
-      raw.user_id != null ? String(raw.user_id) : raw.userId != null ? String(raw.userId) : null,
+      raw.user_id != null
+        ? String(raw.user_id)
+        : raw.userId != null
+          ? String(raw.userId)
+          : raw.sender_id != null
+            ? String(raw.sender_id)
+            : null,
+    senderId:
+      raw.sender_id != null
+        ? String(raw.sender_id)
+        : raw.senderId != null
+          ? String(raw.senderId)
+          : raw.user_id != null
+            ? String(raw.user_id)
+            : null,
+    receptorId: raw.receptor_id != null ? String(raw.receptor_id) : null,
     isOwn,
     attachments,
     raw,

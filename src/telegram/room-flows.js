@@ -469,7 +469,7 @@ export function createRoomFlows(deps) {
     let analysis;
     try {
       analysis = await analyzeRoomWithLlm({
-        roomContext: { project: card.project, guestName: card.guestName },
+        roomContext: { project: card.project, guestName: card.guestName, messages: card.messages },
         llm,
       });
     } catch (e) {

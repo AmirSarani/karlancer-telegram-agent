@@ -72,3 +72,24 @@ On new inbound for an answered/active thread: reload context → re-analyze with
 
 Modules: `src/agent/scan-prepare.js`, `src/worker/handlers.js` (`rooms.scan` / `rooms.prepare_scan`), `src/telegram/scan-ux.js`
 
+
+## Phase A — correct replies (2026-09)
+
+- **Real conversation to the LLM.** `src/agent/conversation.js` builds a chronological, two-sided history
+  (last 12 messages, each trimmed to 500 chars). `adaptDraftWithNote` always sends the client's latest
+  turn (messages after our last reply) as `employer_message`, the history as `conversation`, and
+  owner/system hints as a separate `internal_note`. A note is **added**, never a replacement.
+- **Direct chats without a project** are analyzed from the client's messages (`analyzeRoomWithLlm`
+  passes `clientMessages` + `conversation`; provider prompt says so).
+- `analysis.estimated_days` / requirements go into the draft context; analysis confidence (min with the
+  draft confidence) is used for auto-send safety (`autoMinConfidence`, default `0.6`).
+- **Fallback is never auto-sent.** Provider fallbacks are flagged `fallback:true`; `adaptDraftWithNote`
+  returns `llmUsed:false, fallback:true`; `autoSafetyCheck` routes to an owner card
+  (`llm_fallback`, `analysis_unavailable`, `low_confidence`, `discount_over_limit`, `below_price_floor`, `no_client_text`).
+- **Own-message detection:** `normalizeInboundMessage` keeps `sender_id`; `getOwnUserId` resolves our
+  Karlancer user id via `api.user.me()` (cached 24h in kv `karlancer_own_user_id`); `markOwnMessages`
+  fills `isOwn` when `is_me` flags are missing. The client's id is sent as `receptorId`.
+- **Negotiation:** `detectNegotiation` (discount %, portfolio, price, time; Persian digits OK) +
+  settings `pricing.maxDiscountPct` (default 10) and `pricing.priceFloorToman`. A request above the limit or
+  below the floor goes to the owner. `REPLY_SYSTEM` includes `NEGOTIATION_RULES` (portfolio: point to the
+  Karlancer profile, no outside links).

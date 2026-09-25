@@ -1,29 +1,53 @@
 /**
- * Optional LLM polish — ONLY when owner requests analysis or adds a note.
+ * LLM analysis + draft helpers for chat rooms.
  * Never sends chat messages; returns updated draft text only.
+ *
+ * The client's real messages are ALWAYS the employer_message; owner / internal
+ * notes are passed separately as internal_note (added, never a replacement).
  */
 import { mergeNoteIntoDraft } from './room-state.js';
 import { buildDraftReply } from './draft-api.js';
 import { cleanHumanReply } from './reply-clean.js';
+import { buildConversationHistory, latestClientTurn } from './conversation.js';
 
 /**
- * Adapt draft for ONE room using owner note + optional LLM.
- * Falls back to deterministic merge when LLM disabled/fails.
+ * @param {object} roomContext
+ * @returns {{ history: ReturnType<typeof buildConversationHistory>, clientTurn: string[] }}
+ */
+export function conversationFromContext(roomContext = {}) {
+  const history = Array.isArray(roomContext.history)
+    ? roomContext.history
+    : buildConversationHistory(roomContext.messages || []);
+  const clientTurn = latestClientTurn(history);
+  return { history, clientTurn };
+}
+
+/**
+ * Adapt draft for ONE room using the real conversation + optional internal note + LLM.
+ * Falls back to deterministic merge when LLM disabled/fails (flagged: llmUsed=false, fallback=true).
  *
  * @param {object} opts
- * @param {object} opts.roomContext  fields for buildDraftReply
+ * @param {object} opts.roomContext  fields for buildDraftReply (+ messages/history)
  * @param {string} [opts.currentDraft]
- * @param {string} opts.ownerNote
- * @param {object|null} [opts.llm]  createLlmProvider instance
+ * @param {string} [opts.ownerNote]  owner's own note (merged into fallback draft too)
+ * @param {string} [opts.internalNote]  system hints (price/limits) — LLM only, never merged into text
+ * @param {object|null} [opts.llm]
  * @param {'note'|'analyze'} [opts.mode='note']
+ * @param {object|null} [opts.analysis]  analyzeRoomWithLlm result
+ * @param {object|null} [opts.pricing]
+ * @param {object|null} [opts.negotiation]
  */
 export async function adaptDraftWithNote(opts = {}) {
   const {
     roomContext = {},
     currentDraft = '',
     ownerNote = '',
+    internalNote = '',
     llm = null,
     mode = 'note',
+    analysis = null,
+    pricing = null,
+    negotiation = null,
   } = opts;
 
   const baseDraft =
@@ -32,7 +56,7 @@ export async function adaptDraftWithNote(opts = {}) {
 
   const note = String(ownerNote || '').trim();
 
-  // Always have a deterministic baseline
+  // Deterministic baseline (owner-visible only; never auto-sent)
   const merged = mergeNoteIntoDraft({ text: baseDraft, source: 'template' }, note);
 
   if (!note && mode !== 'analyze') {
@@ -41,6 +65,7 @@ export async function adaptDraftWithNote(opts = {}) {
       text: cleanHumanReply(baseDraft),
       source: 'template',
       llmUsed: false,
+      fallback: true,
     };
   }
 
@@ -50,32 +75,37 @@ export async function adaptDraftWithNote(opts = {}) {
       text: cleanHumanReply(merged.text),
       source: merged.source,
       llmUsed: false,
+      fallback: true,
       reason: 'llm_disabled',
     };
   }
+
+  const { history, clientTurn } = conversationFromContext(roomContext);
+  const employerMessage = clientTurn.join('\n') || '';
 
   try {
     const out = await llm.draftChatReply({
       roomContext: {
         guestName: roomContext.guestName,
         projectTitle: roomContext.project?.title || roomContext.projectTitle,
+        projectDescription: roomContext.project?.description
+          ? String(roomContext.project.description).slice(0, 800)
+          : undefined,
         budget: roomContext.project
           ? {
               min: roomContext.project.minBudget ?? roomContext.project.min_budget,
               max: roomContext.project.maxBudget ?? roomContext.project.max_budget,
+              currency: 'تومان',
             }
           : null,
-        ownerNote: note,
         mode,
       },
-      employerMessage:
-        note ||
-        (roomContext.messages || [])
-          .filter((m) => m && m.isOwn !== true)
-          .map((m) => m.text)
-          .slice(-3)
-          .join('\n') ||
-        baseDraft,
+      employerMessage: employerMessage || baseDraft,
+      history,
+      internalNote: [note, String(internalNote || '').trim()].filter(Boolean).join('\n'),
+      analysis: analysis?.data || null,
+      pricing,
+      negotiation,
     });
 
     const reply =
@@ -83,12 +113,14 @@ export async function adaptDraftWithNote(opts = {}) {
       out?.data?.proposal_text ||
       (typeof out?.data === 'string' ? out.data : null);
 
-    if (out?.ok && reply && String(reply).trim()) {
+    const isFallback = out?.fallback === true || out?.source === 'deterministic_fallback';
+    if (out?.ok && reply && String(reply).trim() && !isFallback) {
       return {
         ok: true,
         text: cleanHumanReply(String(reply).trim()).slice(0, 4000),
         source: 'llm+note',
         llmUsed: true,
+        fallback: false,
         confidence: out.data?.confidence,
       };
     }
@@ -101,12 +133,14 @@ export async function adaptDraftWithNote(opts = {}) {
     text: cleanHumanReply(merged.text),
     source: merged.source,
     llmUsed: false,
+    fallback: true,
     reason: 'llm_fallback',
   };
 }
 
 /**
- * Pure analysis summary without changing draft (optional helper).
+ * Analysis of project OR direct-chat request (from client's messages).
+ * `ok:false` when LLM unavailable or it fell back to heuristics.
  */
 export async function analyzeRoomWithLlm({ roomContext = {}, llm = null } = {}) {
   if (!llm || typeof llm.analyzeProject !== 'function') {
@@ -117,20 +151,27 @@ export async function analyzeRoomWithLlm({ roomContext = {}, llm = null } = {}) 
     };
   }
   const project = roomContext.project || {};
+  const { history, clientTurn } = conversationFromContext(roomContext);
+  const clientMessages = history.filter((h) => h.role !== 'me').map((h) => h.text).slice(-6);
   try {
     const out = await llm.analyzeProject({
-      title: project.title,
-      description: project.description,
+      title: project.title || (clientTurn[0] ? String(clientTurn[0]).slice(0, 80) : undefined),
+      description: project.description || clientMessages.join('\n'),
       budget: {
         min: project.minBudget ?? project.min_budget,
         max: project.maxBudget ?? project.max_budget,
       },
+      clientMessages,
+      conversation: history,
     });
     if (out?.ok) {
+      const isFallback = out.fallback === true || out.source === 'deterministic_fallback';
       return {
-        ok: true,
+        ok: !isFallback,
+        fallback: isFallback,
         summary: out.data?.summary || 'تحلیل انجام شد.',
         data: out.data,
+        confidence: Number(out.data?.confidence) || 0,
         source: out.source,
       };
     }
@@ -140,4 +181,4 @@ export async function analyzeRoomWithLlm({ roomContext = {}, llm = null } = {}) 
   return { ok: false, reason: 'llm_failed', summary: 'تحلیل AI ناموفق بود.' };
 }
 
-export default { adaptDraftWithNote, analyzeRoomWithLlm };
+export default { adaptDraftWithNote, analyzeRoomWithLlm, conversationFromContext };
