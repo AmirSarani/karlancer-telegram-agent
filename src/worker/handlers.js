@@ -9,6 +9,8 @@ import { createRoomState } from '../agent/room-state.js';
 import { runMessagesPoll } from '../agent/messages-poll.js';
 import { createScanPrepare } from '../agent/scan-prepare.js';
 import { createChatContinuum } from '../agent/chat-continuum.js';
+import { runFollowUpScan } from '../agent/follow-up.js';
+import { runWinWatch } from '../agent/win-watch.js';
 import { extractPriceFeatures, extractSentPrice, recordPriceSample } from '../agent/price-memory.js';
 import { createOpportunityScanner } from '../opportunity/scanner.js';
 
@@ -578,6 +580,37 @@ export async function handleJob(ctx, job) {
         price: sentPrice ?? p.price ?? null,
       });
       return { ok: true, result: data };
+    }
+
+    case 'followup.scan': {
+      const roomState = createRoomState(db);
+      const out = await runFollowUpScan({
+        db,
+        roomState,
+        queue: ctx.queue,
+        mutations: ctx.mutations || null,
+        llm: ctx.llm || null,
+        budget: ctx.budget || null,
+        getAllowLiveAutoSend:
+          typeof ctx.getAllowLiveAutoSend === 'function'
+            ? ctx.getAllowLiveAutoSend
+            : () => Boolean(ctx.allowLiveAutoSend),
+      });
+      const prepared = (out.items || []).filter((i) => i.status === 'pending_approval' || i.status === 'queued_auto');
+      if (prepared.length) await emit(ctx, 'followup.prepared', { items: prepared });
+      return { ok: out.ok, result: { items: out.items, skipped: out.skipped || null } };
+    }
+
+    case 'wins.scan': {
+      if (!api?.client?.hasAuth) return { ok: false, errorCode: 'missing_auth', detail: {} };
+      const out = await runWinWatch({
+        db,
+        api,
+        roomState: createRoomState(db),
+        mutations: ctx.mutations || null,
+      });
+      for (const win of out.wins) await emit(ctx, 'post_win.detected', win);
+      return { ok: true, result: { wins: out.wins.length, checked: out.checked, baseline: out.baseline } };
     }
 
     case 'chat.resume_price': {

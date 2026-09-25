@@ -64,6 +64,13 @@ export function defaultAgentSettings() {
     },
     /** Minimum AI analysis confidence (0..1) for a chat reply to be auto-sent. */
     autoMinConfidence: 0.6,
+    /** Polite follow-up when the client has not replied (same gate; HITL unless full auto). */
+    followUp: {
+      enabled: true,
+      afterHours: 24,
+      maxPerRoom: 1,
+      maxAgeDays: 7,
+    },
     /** Show Telegram approval card for first N auto actions each day */
     approvalPreviewFirstN: 3,
     autoShowCardWhenRiskMediumPlus: true,
@@ -131,6 +138,12 @@ export function normalizeAgentSettings(raw) {
           : null,
     },
     autoMinConfidence: clampFloat(raw.autoMinConfidence, d.autoMinConfidence, 0, 1),
+    followUp: {
+      enabled: raw.followUp?.enabled !== undefined ? Boolean(raw.followUp.enabled) : d.followUp.enabled,
+      afterHours: clampInt(raw.followUp?.afterHours, d.followUp.afterHours, 2, 240),
+      maxPerRoom: clampInt(raw.followUp?.maxPerRoom, d.followUp.maxPerRoom, 0, 2),
+      maxAgeDays: clampInt(raw.followUp?.maxAgeDays, d.followUp.maxAgeDays, 1, 30),
+    },
     approvalPreviewFirstN: clampInt(raw.approvalPreviewFirstN, d.approvalPreviewFirstN, 0, 50),
     autoShowCardWhenRiskMediumPlus: raw.autoShowCardWhenRiskMediumPlus !== false,
     updatedAt: raw.updatedAt || null,
@@ -193,6 +206,7 @@ export function createAgentSettingsStore(db, { tenantId = 'default' } = {}) {
       toggles: { ...cur.toggles, ...(patch.toggles || {}) },
       limits: { ...cur.limits, ...(patch.limits || {}) },
       pricing: { ...cur.pricing, ...(patch.pricing || {}) },
+      followUp: { ...cur.followUp, ...(patch.followUp || {}) },
       blacklist: {
         rooms: patch.blacklist?.rooms ?? cur.blacklist.rooms,
         users: patch.blacklist?.users ?? cur.blacklist.users,

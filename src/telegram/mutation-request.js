@@ -40,11 +40,16 @@ export function createMutationRequester({ queue, gate }) {
     const verdict = gate.check(action, gateCtx);
     const isOwnerConfirm = gateCtx.source === 'owner_confirm';
 
-    gate.recordDecision(action, verdict, {
+    // Forced HITL (scan-prepare, follow-up drafts) must not count as an automatic send.
+    const recorded =
+      forceRequireApproval && !isOwnerConfirm && verdict.decision === 'auto_allow'
+        ? { ...verdict, decision: 'require_approval', reason: 'forced_approval', reasonFa: 'نیاز به تأیید شما' }
+        : verdict;
+    gate.recordDecision(action, recorded, {
       actor: requestedBy,
       approvedBy: isOwnerConfirm
         ? requestedBy
-        : verdict.decision === 'auto_allow'
+        : recorded.decision === 'auto_allow'
           ? 'auto:permission_gate'
           : null,
       roomId: payload.roomId ?? gateCtx.roomId,

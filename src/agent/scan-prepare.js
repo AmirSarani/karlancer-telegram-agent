@@ -527,7 +527,7 @@ export function scanSkipReason({ room = {}, invite = null, roomState, roomId, fo
   return null;
 }
 
-function hasPendingSendForRoom(queue, roomId) {
+export function hasPendingSendForRoom(queue, roomId) {
   if (!queue?.pendingApprovals) return false;
   const id = String(roomId);
   return (queue.pendingApprovals() || []).some((a) => {

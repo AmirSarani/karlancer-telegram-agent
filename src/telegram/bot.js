@@ -102,6 +102,7 @@ import { createFeedbackStore } from '../opportunity/feedback.js';
 import { createWizardState } from './wizard-state.js';
 import { checkTokenHealth, formatTokenWarningFa } from '../security/token-health.js';
 import { formatPostWinSectionFa, scanNotificationsForWins, advancePostWin } from '../opportunity/post-win.js';
+import { getLatestPostWin } from '../agent/win-watch.js';
 
 import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
@@ -796,7 +797,15 @@ async function replyMode(ctx, { edit = false } = {}) {
   async function replyPostWin(ctx, { edit = false } = {}) {
     let state = null;
     try {
-      if (api?.notifications?.list) {
+      const latest = db ? getLatestPostWin(db) : null;
+      if (latest?.draftText) {
+        state = { phase: latest.phase, projectId: latest.projectId, roomId: latest.roomId, draftText: latest.draftText, detectedAt: latest.detectedAt };
+      }
+    } catch {
+      state = null;
+    }
+    try {
+      if (!state && api?.notifications?.list) {
         const listed = await api.notifications.list({ page: 1 });
         const { wins } = scanNotificationsForWins(listed.notifications || []);
         if (wins[0]) {

@@ -242,6 +242,7 @@ export function createRoomState(db) {
         pendingSendJobId: v.pendingSendJobId || null,
         followUpCount: Number(v.followUpCount) || 0,
         lastFollowUpAt: v.lastFollowUpAt || null,
+        followUpDraftedFor: v.followUpDraftedFor || null,
         updatedAt: v.updatedAt || row?.updatedAt || null,
       };
     },
