@@ -31,7 +31,9 @@ import {
   formatMessageSentNotice,
   formatMessageBlockedNotice,
   formatBidBlockedNotice,
+  formatFollowUpNotice,
 } from './telegram/send-notices.js';
+import { formatWinNotice } from './agent/win-watch.js';
 
 async function main() {
   // MCP-only / headless: ENABLE_TELEGRAM=false must not require Telegram token
@@ -208,6 +210,10 @@ async function main() {
       });
     }
   }
+
+  const APPROVALS_MARKUP = {
+    inline_keyboard: [[{ text: '✅ تأییدها', callback_data: 'goto:approvals' }, { text: '💬 گفتگوها', callback_data: 'goto:chats' }]],
+  };
 
   function roomCardMarkup(card) {
     if (card.continuumAction === 'price_ask') return roomPriceKeyboard(card.roomId);
@@ -397,6 +403,13 @@ async function main() {
             formatMessageBlockedNotice(payload),
             payload.roomId ? roomCardKeyboard(payload.roomId) : undefined
           );
+        } else if (type === 'followup.prepared' && Array.isArray(payload?.items)) {
+          for (const item of payload.items) {
+            if (item.status !== 'pending_approval') continue; // auto ones get «message.sent»
+            await notifyAllOwnersChannels(formatFollowUpNotice(item), APPROVALS_MARKUP);
+          }
+        } else if (type === 'post_win.detected' && payload) {
+          await notifyAllOwnersChannels(formatWinNotice(payload), APPROVALS_MARKUP);
         } else if (type === 'chat.price_resumed' && payload?.card) {
           // Auto-sent → the message.sent notice follows; otherwise show the resulting card.
           if (payload.card.continuumAction !== 'auto_sent' && config.enableTelegram && config.telegramBotToken) {

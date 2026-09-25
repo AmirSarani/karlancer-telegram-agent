@@ -138,3 +138,24 @@ Modules: `src/agent/scan-prepare.js`, `src/worker/handlers.js` (`rooms.scan` / `
   actually sent (parsed from the sent text after POST success) with features (category, keyword tags,
   scope, days). Deduped per room + amount.
 - Fix: the production worker now receives the PermissionGate (without it full-auto always fell back to HITL).
+
+## Phase D — follow-through (2026-09)
+
+- **Scheduled follow-up** (`followup_scan` → `followup.scan`, every 30 min, `src/agent/follow-up.js`):
+  answered room (in the answered index), no client reply for `followUp.afterHours` (default 24h), not
+  older than `maxAgeDays` (7), fewer than `maxPerRoom` (default 1, max 2) follow-ups, no pending send.
+  One draft per unanswered message (`thread.followUpDraftedFor`), even if the owner rejects it.
+  Draft: LLM (short, polite, no new price) within the token budget, otherwise a fixed polite template.
+  Same path as any send (mutation requester → PermissionGate → approval / VerifiedMutationContract).
+  HITL unless `chatAiMode=full_auto` + `mode=auto` + live auto-send allowed + LLM draft + gate allows.
+  Owner notice «🔁 … پیام پیگیری آماده کردم» (Telegram + Bale) with «✅ تأییدها».
+  Settings: «📜 قوانین» → «🔁 پیام پیگیری» (`وضعیت:` / `بعد از:` / `حداکثر:`).
+- **Scheduled win detection** (`wins_scan` → `wins.scan`, every 10 min, `src/agent/win-watch.js`):
+  notifications with win phrases + status of projects we bid on in the last 30 days (assigned
+  freelancer == our user id; a few per run, rotating). Deduped in kv `postwin:seen`; the first run does
+  not replay wins older than 24h. The first client message (post-win draft) is queued as a
+  `messages.send` approval with `forceRequireApproval` (always HITL) and pushed to all owners on
+  Telegram **and** Bale (`notifyAllOwnersChannels`). State persisted in `postwin:state:<key>` and
+  `postwin:latest` (shown in «🏆 پس از برد»).
+- Forced-approval requests (scan-prepare, follow-up, post-win) are audited as `gate.*`
+  (`forced_approval`), so they never count toward the daily automatic limit.

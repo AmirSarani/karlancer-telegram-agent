@@ -67,4 +67,20 @@ export function formatBidBlockedNotice(p = {}) {
   ].join('\n');
 }
 
-export default { formatMessageSentNotice, formatMessageBlockedNotice, formatBidBlockedNotice, blockReasonFa };
+/**
+ * Follow-up draft waiting for the owner.
+ * @param {{ guestName?: string, text?: string }} p
+ */
+export function formatFollowUpNotice(p = {}) {
+  const prev = String(p.text || '').trim();
+  return [
+    `🔁 ${who(p.guestName)} به پیام شما جواب نداده؛ یک پیام پیگیری کوتاه آماده کردم:`,
+    '',
+    `«${prev.slice(0, 400)}${prev.length > 400 ? '…' : ''}»`,
+    '',
+    'بدون تأیید شما ارسال نمی‌شود. از «✅ تأییدها» تأیید یا رد کنید.',
+  ].join('\n');
+}
+
+export default {
+  formatFollowUpNotice, formatMessageSentNotice, formatMessageBlockedNotice, formatBidBlockedNotice, blockReasonFa };

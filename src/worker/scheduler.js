@@ -10,6 +10,8 @@ const DEFAULTS = [
   { name: 'messages_poll', capability: 'messages.poll', intervalMs: 2 * 60_000, payload: { page: 1 } },
   { name: 'health_refresh', capability: 'health.ping', intervalMs: 60_000, payload: {} },
   { name: 'reconcile_poll', capability: 'health.ping', intervalMs: 120_000, payload: { note: 'reconcile_tick' } },
+  { name: 'followup_scan', capability: 'followup.scan', intervalMs: 30 * 60_000, payload: {} },
+  { name: 'wins_scan', capability: 'wins.scan', intervalMs: 10 * 60_000, payload: {} },
 ];
 
 /**

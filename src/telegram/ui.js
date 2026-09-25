@@ -298,6 +298,8 @@ export function rulesInlineKeyboard() {
     .text('✏️ معیار پیام خودکار', 'wiz:msg_rule')
     .text('💸 سقف تخفیف و کف قیمت', 'wiz:pricing')
     .row()
+    .text('🔁 پیام پیگیری', 'wiz:followup')
+    .row()
     .text('⬅️ تنظیمات', 'nav:set')
     .text('🏠 خانه', 'nav:home');
 }
@@ -335,6 +337,7 @@ export function parseCallbackData(data) {
     if (data === 'wiz:bl_rooms') return { type: 'wiz_bl_rooms' };
     if (data === 'wiz:msg_rule') return { type: 'wiz_msg_rule' };
     if (data === 'wiz:pricing') return { type: 'wiz_pricing' };
+    if (data === 'wiz:followup') return { type: 'wiz_followup' };
     // control-panel map is applied in bot via parseControlCallback; keep aliases here too
     const cpMap = {
       'cp:hub': 'cp_hub',
@@ -782,6 +785,8 @@ export function formatRulesCard(s = {}) {
     `• آستانه بودجه: ${bid.budgetThreshold ?? '—'}`,
     `• بدون پیشنهاد قبلی: ${bid.noExistingBid !== false ? 'بله' : 'خیر'}`,
     `• اطمینان: ${bid.scoringAvailable ? (bid.confidenceThreshold ?? '—') : 'هنوز در دسترس نیست'}`,
+    '',
+    `🔁 پیگیری: ${s.followUp?.enabled === false ? 'خاموش' : `بعد از ${toFaNum(s.followUp?.afterHours ?? 24)} ساعت بی‌پاسخی، حداکثر ${toFaNum(s.followUp?.maxPerRoom ?? 1)} بار`}`,
     '',
     '💸 مذاکره قیمت:',
     `• سقف تخفیف: ${toFaNum(s.pricing?.maxDiscountPct ?? 10)}٪`,

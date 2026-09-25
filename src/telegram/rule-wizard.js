@@ -128,4 +128,53 @@ export function parsePricingWizard(text) {
   return { ok, patch: ok ? patch : undefined, errors };
 }
 
-export default { parseMessageRuleWizard, parsePricingWizard, MESSAGE_RULE_WIZARD_HELP, PRICING_WIZARD_HELP };
+export const FOLLOWUP_WIZARD_HELP = [
+  '🔁 پیام پیگیری',
+  '',
+  'وقتی کارفرما به پیام شما جواب نداده، یک پیام پیگیری کوتاه آماده می‌کنم (بدون تأیید شما ارسال نمی‌شود، مگر در حالت خودکار کامل).',
+  'در یک یا چند خط بفرستید:',
+  'وضعیت: روشن',
+  'بعد از: ۲۴',
+  'حداکثر: ۱',
+  '',
+  '«بعد از» به ساعت است (۲ تا ۲۴۰). «حداکثر» تعداد پیگیری برای هر گفتگو است (۰ تا ۲).',
+  'لغو: /cancel',
+].join('\n');
+
+/**
+ * @param {string} text
+ * @returns {{ ok: boolean, patch?: object, errors: string[] }}
+ */
+export function parseFollowUpWizard(text) {
+  const patch = {};
+  const errors = [];
+  for (const line of splitLines(text)) {
+    const kv = keyValue(line);
+    if (!kv) {
+      errors.push(`این خط را متوجه نشدم: «${line.slice(0, 40)}»`);
+      continue;
+    }
+    if (/وضعیت/.test(kv.key)) {
+      if (/روشن|فعال/.test(kv.value)) patch.enabled = true;
+      else if (/خاموش|غیرفعال/.test(kv.value)) patch.enabled = false;
+      else errors.push('وضعیت باید «روشن» یا «خاموش» باشد.');
+    } else if (/بعد/.test(kv.key)) {
+      const n = parseNumber(kv.value);
+      if (n == null || n < 2 || n > 240) errors.push('«بعد از» باید عددی بین ۲ تا ۲۴۰ ساعت باشد.');
+      else patch.afterHours = Math.round(n);
+    } else if (/حداکثر/.test(kv.key)) {
+      const n = parseNumber(kv.value);
+      if (n == null || n < 0 || n > 2) errors.push('«حداکثر» باید ۰، ۱ یا ۲ باشد.');
+      else patch.maxPerRoom = Math.round(n);
+    } else {
+      errors.push(`«${kv.key.slice(0, 20)}» را نمی‌شناسم.`);
+    }
+  }
+  const ok = errors.length === 0 && Object.keys(patch).length > 0;
+  if (!Object.keys(patch).length && !errors.length) errors.push('چیزی برای ذخیره پیدا نشد.');
+  return { ok, patch: ok ? patch : undefined, errors };
+}
+
+export default {
+  parseFollowUpWizard,
+  FOLLOWUP_WIZARD_HELP, parseMessageRuleWizard, parsePricingWizard, MESSAGE_RULE_WIZARD_HELP, PRICING_WIZARD_HELP };

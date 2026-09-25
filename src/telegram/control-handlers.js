@@ -56,6 +56,8 @@ import { formatFriendlyError, formatRulesCard, rulesInlineKeyboard } from './ui.
 import {
   parseMessageRuleWizard,
   parsePricingWizard,
+  parseFollowUpWizard,
+  FOLLOWUP_WIZARD_HELP,
   MESSAGE_RULE_WIZARD_HELP,
   PRICING_WIZARD_HELP,
 } from './rule-wizard.js';
@@ -508,6 +510,15 @@ export function createControlHandlers(deps) {
           { edit }
         );
       },
+      wiz_followup: async () => {
+        if (wizard) wizard.set(ctx.from?.id, { kind: 'followup' });
+        await editOrReply(
+          ctx,
+          FOLLOWUP_WIZARD_HELP,
+          { reply_markup: new InlineKeyboard().text('⬅️ قوانین', 'nav:rules') },
+          { edit }
+        );
+      },
       wiz_pricing: async () => {
         if (wizard) wizard.set(ctx.from?.id, { kind: 'pricing' });
         await editOrReply(
@@ -635,8 +646,13 @@ export function createControlHandlers(deps) {
       return true;
     }
 
-    if (st.kind === 'msg_rule' || st.kind === 'pricing') {
-      const parsed = st.kind === 'msg_rule' ? parseMessageRuleWizard(textIn) : parsePricingWizard(textIn);
+    if (st.kind === 'msg_rule' || st.kind === 'pricing' || st.kind === 'followup') {
+      const parsed =
+        st.kind === 'msg_rule'
+          ? parseMessageRuleWizard(textIn)
+          : st.kind === 'pricing'
+            ? parsePricingWizard(textIn)
+            : parseFollowUpWizard(textIn);
       if (!parsed.ok) {
         await ctx.reply([...parsed.errors, '', 'دوباره بفرستید یا /cancel'].join('\n'), menuOpts());
         return true;
@@ -645,8 +661,10 @@ export function createControlHandlers(deps) {
       const cur = store.get();
       if (st.kind === 'msg_rule') {
         store.update({ rules: { ...cur.rules, messageAuto: { ...cur.rules.messageAuto, ...parsed.patch } } });
-      } else {
+      } else if (st.kind === 'pricing') {
         store.update({ pricing: { ...cur.pricing, ...parsed.patch } });
+      } else {
+        store.update({ followUp: { ...cur.followUp, ...parsed.patch } });
       }
       wizard.clear(ctx.from?.id);
       await ctx.reply('✅ ذخیره شد.', menuOpts());
