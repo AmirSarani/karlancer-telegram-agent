@@ -299,6 +299,7 @@ export function rulesInlineKeyboard() {
     .text('💸 سقف تخفیف و کف قیمت', 'wiz:pricing')
     .row()
     .text('🔁 پیام پیگیری', 'wiz:followup')
+    .text('🔄 یادگیری از قیمت‌های قبلی', 'wiz:price_sync')
     .row()
     .text('⬅️ تنظیمات', 'nav:set')
     .text('🏠 خانه', 'nav:home');
@@ -338,6 +339,7 @@ export function parseCallbackData(data) {
     if (data === 'wiz:msg_rule') return { type: 'wiz_msg_rule' };
     if (data === 'wiz:pricing') return { type: 'wiz_pricing' };
     if (data === 'wiz:followup') return { type: 'wiz_followup' };
+    if (data === 'wiz:price_sync') return { type: 'wiz_price_sync' };
     // control-panel map is applied in bot via parseControlCallback; keep aliases here too
     const cpMap = {
       'cp:hub': 'cp_hub',
@@ -789,8 +791,9 @@ export function formatRulesCard(s = {}) {
     `🔁 پیگیری: ${s.followUp?.enabled === false ? 'خاموش' : `بعد از ${toFaNum(s.followUp?.afterHours ?? 24)} ساعت بی‌پاسخی، حداکثر ${toFaNum(s.followUp?.maxPerRoom ?? 1)} بار`}`,
     '',
     '💸 مذاکره قیمت:',
-    `• سقف تخفیف: ${toFaNum(s.pricing?.maxDiscountPct ?? 10)}٪`,
-    `• کف قیمت: ${s.pricing?.priceFloorToman ? `${toFaNum(Number(s.pricing.priceFloorToman).toLocaleString('en-US'))} تومان` : '—'}`,
+    '• قیمت هر کار: بر اساس حجم و سختی همان کار و قیمت‌های قبلی شما',
+    `• سقف تخفیف: ${toFaNum(s.pricing?.maxDiscountPct ?? 10)}٪ از قیمت همان کار`,
+    `• کف قیمت (اختیاری): ${s.pricing?.priceFloorToman ? `${toFaNum(Number(s.pricing.priceFloorToman).toLocaleString('en-US'))} تومان، فقط برای کارهای گران‌تر از آن` : 'خاموش'}`,
     '',
     `سقف روزانه (فقط ارسال‌های خودکار): پیام ${toFaNum(limits.maxAutoMessagesPerDay ?? 5)} · پیشنهاد ${toFaNum(limits.maxAutoBidsPerDay ?? 10)}`,
     '',

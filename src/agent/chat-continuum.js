@@ -414,7 +414,7 @@ export function createChatContinuum(deps) {
       internal.push(
         discount.needsOwner
           ? 'کارفرما تخفیف بیشتر از سقف خواسته؛ قول تخفیف نده و بگو بررسی می‌کنی.'
-          : `سقف تخفیف مجاز ${discount.maxPct}٪ است${discount.minPrice ? ` و کف قیمت ${formatTomanFa(discount.minPrice)}` : ''}.`
+          : `سقف تخفیف مجاز ${discount.maxPct}٪ است${discount.minPrice ? ` و کمترین قیمت قابل قبول برای این کار ${formatTomanFa(discount.minPrice)}` : ''}.`
       );
     }
     internal.push('پاسخ را کوتاه، انسانی و فارسی بنویس.');

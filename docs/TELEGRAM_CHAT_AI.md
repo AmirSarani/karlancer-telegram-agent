@@ -173,3 +173,26 @@ Modules: `src/agent/scan-prepare.js`, `src/worker/handlers.js` (`rooms.scan` / `
 - «💰 چه قیمتی بدهم؟» card (`formatPriceAskCard`): title, full description, budget, category/skills,
   the client's requests from the chat (analysis summary/requirements or their last messages), scope,
   difficulty, days, suggested price, acceptable range and «چرا این قیمت».
+
+## Item 2 — learning past manual prices (2026-09, READ-ONLY)
+
+- `src/agent/price-crawl.js` `crawlPastPrices`: GET-only, polite delay (~0.7 s between calls).
+  - Past bids: `GET /api/bids?page=N` (Laravel page of 10; `api.bids.listMine`). Amount = sum of
+    milestone budgets (Toman), else `budget`; days = `duration`; nested project (title, description,
+    budget, skills). `won` = status not in pending/declined/failed/canceled/rejected/withdrawn.
+  - Chat prices: rooms list + first messages page per room; our messages (`sender_id` == own user id)
+    parsed with `extractSentPrice` («۲ میلیون», «۱,۵۰۰,۰۰۰ تومان», «... ریال» ÷ 10, "3 million").
+  - Stored in `price_samples` with `ext_id` (`bid:<id>` / `chat:<msgId>`, unique) → re-runs only
+    refresh `won`. Features: category, keywords (skills), scope tier, difficulty, days, source, won, short title.
+- Re-run: Telegram «📜 قوانین» → «🔄 یادگیری از قیمت‌های قبلی» (worker job `pricing.crawl`, owner gets a
+  count summary), or on the server `node scripts/crawl-prices.mjs` (prints counts + anonymized samples).
+
+## Item 3 — effort-based pricing (2026-09)
+
+- `deriveJobTier` → small / medium / large (+ difficulty) from analysis complexity, requirement count,
+  days, description length, size keywords and client budget.
+- Per-job range: similar past samples p25..p75 (≥ 3 samples; samples two tiers apart are ignored) →
+  client budget → `ruleRangeForTier` (small 0.8–5M, medium 5–25M, large 25–90M Toman). Without budget
+  or history the suggestion is the tier's own mid (by days), not a flat big-project price.
+- Discount cap is relative to the job's own price. The global price floor is optional (off by default)
+  and only applies to jobs priced at or above it, so a ~1M Toman job is never rejected by it.

@@ -3,7 +3,7 @@
  * unless caller (full_auto or owner) includes it.
  */
 import { recommendPrice } from '../intelligence/pricing.js';
-import { extractPriceFeatures, learnedPriceFor, getRoomPriceAnswer, roundToman } from './price-memory.js';
+import { extractPriceFeatures, learnedPriceFor, getRoomPriceAnswer, roundToman, ruleRangeForTier } from './price-memory.js';
 
 /**
  * @param {object} [project]
@@ -81,7 +81,26 @@ function decideChatPriceRaw({ db = null, card = {}, clientText = '', analysis = 
   const project = card?.project || {};
   const features = extractPriceFeatures({ project: card?.project || null, analysis, clientText, messages: card?.messages });
   const learned = db ? learnedPriceFor(db, features) : { count: 0, confident: false, amount: null };
-  const extra = { features, basedOnN: 0, learnedCount: learned.count, needsOwnerPrice: false, firstTimeType: learned.count === 0 };
+  const tier = features.scope || 'medium';
+  const minB0 = num(project.minBudget ?? project.min_budget);
+  const maxB0 = num(project.maxBudget ?? project.max_budget);
+  // Per-job acceptable range: similar past prices (p25..p75) → client budget → tier rules.
+  const rule = ruleRangeForTier(tier, features.days);
+  const range =
+    learned.count >= 3 && learned.p25 && learned.p75
+      ? { low: roundToman(learned.p25), high: roundToman(learned.p75), source: 'learned' }
+      : minB0 != null || maxB0 != null
+        ? { low: minB0 ?? Math.round((maxB0 || 0) * 0.6), high: maxB0 ?? Math.round((minB0 || 0) * 1.5), source: 'budget' }
+        : { low: rule.low, high: rule.high, source: 'rules' };
+  const extra = {
+    features,
+    tier,
+    range,
+    basedOnN: 0,
+    learnedCount: learned.count,
+    needsOwnerPrice: false,
+    firstTimeType: learned.count === 0,
+  };
 
   const answer = db && roomId ? getRoomPriceAnswer(db, roomId) : null;
   if (answer?.amount) {
@@ -120,7 +139,15 @@ function decideChatPriceRaw({ db = null, card = {}, clientText = '', analysis = 
       needsOwnerPrice: true,
     };
   }
-  return { ...base, ...extra, needsOwnerPrice: true };
+  // No budget, no similar past price: effort-based rule for this job's own size (small jobs stay cheap).
+  return {
+    amount: rule.mid,
+    labelFa: formatToman(rule.mid),
+    source: 'pricing_rules',
+    includeInDraft: false,
+    ...extra,
+    needsOwnerPrice: true,
+  };
 }
 
 /** @see decideChatPriceRaw — adds a Persian «why this price» line. */
@@ -128,6 +155,8 @@ export function decideChatPrice(input = {}) {
   const p = decideChatPriceRaw(input);
   return { ...p, reasonFa: priceReasonFa(p) };
 }
+
+const TIER_FA = { small: 'کوچک', medium: 'متوسط', large: 'بزرگ' };
 
 export function priceReasonFa(p = {}) {
   const n = Number(p.basedOnN) || 0;
@@ -144,7 +173,7 @@ export function priceReasonFa(p = {}) {
     case 'learned_uncertain':
       return `بر اساس ${fa(n)} کار مشابه قبلی؛ نمونه‌ها هنوز کم یا پراکنده‌اند`;
     case 'pricing_rules':
-      return 'از قواعد قیمت‌گذاری (نوع کار، حجم و سختی)؛ کار مشابهی با قیمت ثبت‌شده ندارم';
+      return `از قواعد قیمت‌گذاری برای یک کار ${TIER_FA[p.tier] || 'متوسط'} (حجم، سختی و زمان)؛ کار مشابهی با قیمت ثبت‌شده ندارم`;
     default:
       return 'برآورد تقریبی';
   }

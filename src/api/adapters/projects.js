@@ -5,8 +5,19 @@ export function createProjectsAdapter(client) {
   return {
     async resolveSlug(projectId) {
       if (!projectId) throw new KarlancerApiError('invalid_input', 'projectId required');
-      const res = await client.get(`/api/publics/projects/${projectId}`, { auth: false });
-      const slug = res.data?.data;
+      let res;
+      try {
+        res = await client.get(`/api/publics/projects/${projectId}`, { auth: false });
+      } catch (e) {
+        // Karlancer answers a numeric id with HTTP 400 {status:'redirect', data:'<slug>'} (verified live).
+        const body = e?.body;
+        if (e?.status === 400 && body && body.status === 'redirect' && typeof body.data === 'string' && body.data) {
+          return { projectId: String(projectId), slug: body.data, raw: body, redirected: true };
+        }
+        throw e;
+      }
+      const d = res.data?.data;
+      const slug = typeof d === 'string' ? d : d && typeof d === 'object' ? d.url || d.slug || null : null;
       return { projectId: String(projectId), slug: slug != null ? String(slug) : null, raw: res.data };
     },
 
@@ -76,13 +87,15 @@ function normalizeProject(proj) {
     slug: proj.url || proj.slug || null,
     state: proj.state || proj.status || null,
     skills: (Array.isArray(proj.skills) ? proj.skills : Array.isArray(proj.tags) ? proj.tags : [])
-      .map((x) => (x && typeof x === 'object' ? x.title || x.name || null : x))
+      .map((x) => (x && typeof x === 'object' ? x.display || x.title || x.name || null : x))
       .filter(Boolean)
       .map(String),
     category:
       (proj.category && typeof proj.category === 'object' ? proj.category.title || proj.category.name : proj.category) ||
       proj.category_title ||
+      (Array.isArray(proj.breadcrumbs) && proj.breadcrumbs.length ? proj.breadcrumbs[proj.breadcrumbs.length - 1]?.name : null) ||
       null,
+    usersBid: proj.users_bid && typeof proj.users_bid === 'object' ? { id: proj.users_bid.id ?? null, status: proj.users_bid.status ?? null } : null,
     freelancerId: proj.freelancer_id ?? proj.worker_id ?? proj.assigned_freelancer_id ?? null,
     files: proj.files || proj.attachments || [],
     raw: proj,
