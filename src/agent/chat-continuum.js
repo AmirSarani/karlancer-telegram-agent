@@ -494,6 +494,10 @@ export function createChatContinuum(deps) {
         basedOnN: price.basedOnN || 0,
         firstTimeType: Boolean(price.firstTimeType),
         reason: price.needsOwnerPrice ? 'no_budget' : 'low_confidence',
+        source: price.source || null,
+        reasonFa: price.reasonFa || null,
+        range: price.range || null,
+        tier: price.tier || price.features?.scope || null,
       },
     });
     roomState.setCard(base.roomId, enriched);
@@ -528,6 +532,8 @@ export function createChatContinuum(deps) {
       priceSource: extra.price?.source ?? null,
       priceBasedOnN: extra.price?.basedOnN || 0,
       priceAsk: extra.priceAsk || null,
+      priceReasonFa: extra.price?.reasonFa ?? null,
+      analysisDetail: analysisDetailOf(extra.analysis),
       analysisSummary: extra.analysis?.summary || extra.lightSummary || null,
       llmUsed: Boolean(extra.llmUsed),
       autoSend: extra.autoSend || null,
@@ -613,6 +619,18 @@ export function autoSafetyCheck(pipe, settings = {}) {
     return { reason: 'no_client_text', reasonFa: 'پیام تازه‌ای از کارفرما پیدا نشد' };
   }
   return null;
+}
+
+function analysisDetailOf(analysis) {
+  if (!analysis) return null;
+  const d = analysis.data || analysis;
+  return {
+    summary: analysis.summary || d.summary || null,
+    requirements: Array.isArray(d.requirements) ? d.requirements.slice(0, 12).map(String) : [],
+    complexity: d.complexity || null,
+    estimatedDays: Number(d.estimated_days) || null,
+    confidence: Number.isFinite(Number(analysis.confidence ?? d.confidence)) ? Number(analysis.confidence ?? d.confidence) : null,
+  };
 }
 
 function formatTomanFa(n) {

@@ -3,6 +3,7 @@
  */
 import { Bot } from 'grammy';
 import { redactString } from '../security/redaction.js';
+import { splitTelegramText } from './split-text.js';
 
 /**
  * Send one message to a single chat.
@@ -17,16 +18,20 @@ export async function notifyOwner({ token, chatId, text, reply_markup } = {}) {
   if (!token || chatId == null || chatId === '') {
     return { ok: false, error: 'missing_config' };
   }
-  const safeText = redactString(String(text || '')).slice(0, 4000);
+  const safeText = redactString(String(text || ''));
   if (!safeText.trim()) {
     return { ok: false, error: 'empty_text' };
   }
   try {
     const bot = new Bot(String(token));
-    const opts = {};
-    if (reply_markup) opts.reply_markup = reply_markup;
-    await bot.api.sendMessage(Number(chatId) || chatId, safeText, opts);
-    return { ok: true };
+    // Long text → sequential messages; buttons only on the last part.
+    const parts = splitTelegramText(safeText);
+    for (let i = 0; i < parts.length; i++) {
+      const opts = {};
+      if (reply_markup && i === parts.length - 1) opts.reply_markup = reply_markup;
+      await bot.api.sendMessage(Number(chatId) || chatId, parts[i], opts);
+    }
+    return { ok: true, parts: parts.length };
   } catch (e) {
     return { ok: false, error: redactString(String(e?.message || e)).slice(0, 200) };
   }
@@ -69,16 +74,22 @@ export async function editOwnerMessage({ token, chatId, messageId, text, reply_m
   if (!token || chatId == null || chatId === '' || messageId == null) {
     return { ok: false, error: 'missing_config' };
   }
-  const safeText = redactString(String(text || '')).slice(0, 4000);
+  const safeText = redactString(String(text || ''));
   if (!safeText.trim()) {
     return { ok: false, error: 'empty_text' };
   }
   try {
     const bot = new Bot(String(token));
-    const opts = {};
-    if (reply_markup) opts.reply_markup = reply_markup;
-    await bot.api.editMessageText(Number(chatId) || chatId, Number(messageId), safeText, opts);
-    return { ok: true };
+    const parts = splitTelegramText(safeText);
+    const firstOpts = {};
+    if (reply_markup && parts.length === 1) firstOpts.reply_markup = reply_markup;
+    await bot.api.editMessageText(Number(chatId) || chatId, Number(messageId), parts[0], firstOpts);
+    for (let i = 1; i < parts.length; i++) {
+      const opts = {};
+      if (reply_markup && i === parts.length - 1) opts.reply_markup = reply_markup;
+      await bot.api.sendMessage(Number(chatId) || chatId, parts[i], opts);
+    }
+    return { ok: true, parts: parts.length };
   } catch (e) {
     return { ok: false, error: redactString(String(e?.message || e)).slice(0, 200) };
   }

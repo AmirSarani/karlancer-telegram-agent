@@ -103,6 +103,7 @@ import { createWizardState } from './wizard-state.js';
 import { checkTokenHealth, formatTokenWarningFa } from '../security/token-health.js';
 import { formatPostWinSectionFa, scanNotificationsForWins, advancePostWin } from '../opportunity/post-win.js';
 import { getLatestPostWin } from '../agent/win-watch.js';
+import { splitTelegramText } from './split-text.js';
 
 import { redactString } from '../security/redaction.js';
 import { createRoomFlows } from './room-flows.js';
@@ -238,6 +239,8 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
   }
 
   async function editOrReply(ctx, text, extra = {}, { edit = false } = {}) {
+    const parts = splitTelegramText(String(text ?? ''));
+    if (parts.length > 1) return sendLongText(ctx, parts, extra, { edit });
     if (edit && ctx.callbackQuery) {
       try {
         await ctx.editMessageText(text, extra);
@@ -254,6 +257,48 @@ export function createBot({ token, ownerChatId, ownerChatIds, hooks = {} }) {
       messageId: msg?.message_id,
       chatId: ctx.chat?.id ?? msg?.chat?.id,
     };
+  }
+
+  /**
+   * Search/list results may carry a shortened description; fetch the project page (read-only)
+   * when it looks cut, and keep whichever is longer.
+   */
+  async function fetchFullDescription(opp) {
+    const cur = String(opp?.description || opp?.desc || '').trim();
+    const looksCut = !cur || cur.length <= 320 || /(…|\.\.\.)$/.test(cur);
+    if (!looksCut || !api?.projects?.get || opp?.id == null) return cur;
+    try {
+      const got = opp.slug && api.projects.getBySlug ? await api.projects.getBySlug(opp.slug) : await api.projects.get(opp.id);
+      const full = String(got?.project?.description || '').trim();
+      return full.length > cur.length ? full : cur;
+    } catch {
+      return cur;
+    }
+  }
+
+  /** Long text: first part edits/replies, the rest follow; buttons stay on the last part. */
+  async function sendLongText(ctx, parts, extra = {}, { edit = false } = {}) {
+    const { reply_markup, ...rest } = extra || {};
+    let first = null;
+    if (edit && ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(parts[0], rest);
+        first = { edited: true, messageId: ctx.callbackQuery.message?.message_id };
+      } catch {
+        first = null;
+      }
+    }
+    if (!first) {
+      const msg = await ctx.reply(parts[0], { ...menuOpts(), ...rest });
+      first = { edited: false, messageId: msg?.message_id };
+    }
+    let last = first;
+    for (let i = 1; i < parts.length; i++) {
+      const isLast = i === parts.length - 1;
+      const msg = await ctx.reply(parts[i], { ...rest, ...(isLast && reply_markup ? { reply_markup } : {}) });
+      last = { edited: false, messageId: msg?.message_id };
+    }
+    return { ...last, chatId: ctx.chat?.id, parts: parts.length };
   }
 
   const controlBridges = {
@@ -2062,8 +2107,10 @@ async function replyMode(ctx, { edit = false } = {}) {
           await editOrReply(ctx, 'فرصت پیدا نشد.', { reply_markup: opportunitiesListKeyboard([]) }, { edit: true });
           return;
         }
+        const opp = { ...(row.opportunity || row) };
+        opp.fullDescription = await fetchFullDescription(opp);
         const card = {
-          opportunity: row.opportunity || row,
+          opportunity: opp,
           score: row.score,
           reasons: row.scoreReasons || [],
           decision: row.decision,

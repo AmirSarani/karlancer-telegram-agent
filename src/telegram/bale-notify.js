@@ -3,6 +3,7 @@
  * Bale Bot API is Telegram-compatible at https://tapi.bale.ai
  * Never breaks Telegram path; secrets never logged.
  */
+import { splitTelegramText } from './split-text.js';
 import { redactString } from '../security/redaction.js';
 
 export const BALE_API_ROOT = 'https://tapi.bale.ai';
@@ -28,7 +29,7 @@ export async function notifyBaleOwners({
   if (!ids.length) {
     return { ok: false, skipped: true, error: 'bale_chat_ids_absent' };
   }
-  const safeText = redactString(String(text || '')).slice(0, 4000);
+  const safeText = redactString(String(text || ''));
   if (!safeText.trim()) {
     return { ok: false, error: 'empty_text' };
   }
@@ -40,18 +41,23 @@ export async function notifyBaleOwners({
   for (const chatId of ids) {
     try {
       const url = `${root}/bot${token}/sendMessage`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          chat_id: Number(chatId) || chatId,
-          text: safeText,
-        }),
-      });
-      if (res.ok) sent += 1;
-      else {
-        lastErr = `http_${res.status}`;
+      let allOk = true;
+      for (const part of splitTelegramText(safeText)) {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            chat_id: Number(chatId) || chatId,
+            text: part,
+          }),
+        });
+        if (!res.ok) {
+          allOk = false;
+          lastErr = `http_${res.status}`;
+          break;
+        }
       }
+      if (allOk) sent += 1;
     } catch (e) {
       lastErr = redactString(String(e?.message || e)).slice(0, 200);
     }

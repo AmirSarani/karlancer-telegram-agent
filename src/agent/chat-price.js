@@ -76,7 +76,7 @@ function formatToman(n) {
  *
  * @param {{ db?: any, card?: object, clientText?: string, analysis?: object, scoringProfile?: object }} input
  */
-export function decideChatPrice({ db = null, card = {}, clientText = '', analysis = null, scoringProfile = {} } = {}) {
+function decideChatPriceRaw({ db = null, card = {}, clientText = '', analysis = null, scoringProfile = {} } = {}) {
   const roomId = card?.roomId != null ? String(card.roomId) : null;
   const project = card?.project || {};
   const features = extractPriceFeatures({ project: card?.project || null, analysis, clientText, messages: card?.messages });
@@ -121,6 +121,33 @@ export function decideChatPrice({ db = null, card = {}, clientText = '', analysi
     };
   }
   return { ...base, ...extra, needsOwnerPrice: true };
+}
+
+/** @see decideChatPriceRaw — adds a Persian «why this price» line. */
+export function decideChatPrice(input = {}) {
+  const p = decideChatPriceRaw(input);
+  return { ...p, reasonFa: priceReasonFa(p) };
+}
+
+export function priceReasonFa(p = {}) {
+  const n = Number(p.basedOnN) || 0;
+  const fa = (v) => Number(v).toLocaleString('fa-IR');
+  switch (p.source) {
+    case 'owner_answer':
+      return 'قیمتی که خودتان برای این گفتگو دادید';
+    case 'learned':
+      return `بر اساس ${fa(n)} کار مشابه قبلی شما (میانهٔ قیمت‌ها)`;
+    case 'budget_learned':
+      return `بر اساس ${fa(n)} کار مشابه قبلی، در محدودهٔ بودجهٔ کارفرما`;
+    case 'project_budget':
+      return 'بر اساس بودجهٔ اعلام‌شدهٔ کارفرما (کمی زیر میانهٔ بودجه)';
+    case 'learned_uncertain':
+      return `بر اساس ${fa(n)} کار مشابه قبلی؛ نمونه‌ها هنوز کم یا پراکنده‌اند`;
+    case 'pricing_rules':
+      return 'از قواعد قیمت‌گذاری (نوع کار، حجم و سختی)؛ کار مشابهی با قیمت ثبت‌شده ندارم';
+    default:
+      return 'برآورد تقریبی';
+  }
 }
 
 export default suggestChatPrice;

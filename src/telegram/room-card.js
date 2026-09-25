@@ -1,6 +1,7 @@
 /**
  * Telegram room / chat cards — User View (default) vs Technical Details.
  */
+import { stripHtml } from '../agent/message-normalize.js';
 import { InlineKeyboard } from 'grammy';
 import { redactString } from '../security/redaction.js';
 import { cleanHumanReply, detectMessageSender } from '../agent/reply-clean.js';
@@ -354,7 +355,90 @@ export function roomPriceKeyboard(roomId) {
   ]);
 }
 
+const TIER_FA = { small: 'کوچک', medium: 'متوسط', large: 'بزرگ' };
+const COMPLEXITY_FA = { low: 'ساده', medium: 'متوسط', high: 'پیچیده' };
+
+/**
+ * Full «💰 چه قیمتی بدهم؟» card: project context + client requests + scope + why this price
+ * (+ draft preview when present). Long output is split into sequential messages by the sender.
+ * @param {object} card
+ */
+export function formatPriceAskCard(card = {}) {
+  const ask = card.priceAsk || {};
+  const project = card.project || {};
+  const detail = card.analysisDetail || {};
+  const guest = card.guestName || card.guest_name || 'کارفرما';
+  const minB = project.minBudget ?? project.min_budget;
+  const maxB = project.maxBudget ?? project.max_budget;
+  const desc = stripHtml(String(project.description || '')).trim();
+  const skills = Array.isArray(project.skills) ? project.skills.filter(Boolean).map(String) : [];
+  const lines = ['💰 چه قیمتی بدهم؟', '', `👤 کارفرما: ${redactString(String(guest))}`];
+
+  lines.push('', '📁 پروژه');
+  lines.push(`• عنوان: ${project.title ? redactString(String(project.title)) : 'گفتگوی مستقیم بدون پروژه'}`);
+  const budgetFa =
+    minB != null && maxB != null
+      ? `${fmtNum(minB)} تا ${fmtNum(maxB)} تومان`
+      : minB != null || maxB != null
+        ? formatBudgetFa(minB, maxB)
+        : 'کارفرما بودجه مشخص نکرده';
+  lines.push(`• بودجه: ${budgetFa}`);
+  if (project.category) lines.push(`• دسته: ${redactString(String(project.category))}`);
+  if (skills.length) lines.push(`• مهارت‌ها: ${skills.slice(0, 12).join('، ')}`);
+  const dur = project.jobDuration ?? project.job_duration;
+  if (dur != null && String(dur).trim() !== '') lines.push(`• مدت اعلام‌شده: ${formatDurationFa(dur)}`);
+  if (desc) lines.push('', '📄 شرح کامل پروژه:', redactString(desc));
+
+  // Client's requests from the chat
+  const reqs = Array.isArray(detail.requirements) ? detail.requirements.filter(Boolean) : [];
+  const clientMsgs = (Array.isArray(card.messages) ? card.messages : [])
+    .filter((m) => detectMessageSender(m) !== 'you')
+    .slice(-3)
+    .map((m) => redactString(stripMsgMarkers(m.text || '')).trim())
+    .filter(Boolean);
+  lines.push('', '🗣 خواسته‌های کارفرما در گفتگو');
+  if (detail.summary) lines.push(`• خلاصه: ${redactString(String(detail.summary))}`);
+  for (const r of reqs.slice(0, 10)) lines.push(`• ${redactString(String(r))}`);
+  if (!detail.summary && !reqs.length) {
+    if (clientMsgs.length) for (const t of clientMsgs) lines.push(`• «${t}»`);
+    else lines.push('• پیام مشخصی از کارفرما ثبت نشده');
+  }
+
+  // Scope estimate
+  const tier = ask.tier || null;
+  const est = [];
+  if (tier && TIER_FA[tier]) est.push(`حجم کار: ${TIER_FA[tier]}`);
+  if (detail.complexity && COMPLEXITY_FA[detail.complexity]) est.push(`سختی: ${COMPLEXITY_FA[detail.complexity]}`);
+  if (detail.estimatedDays) est.push(`زمان تقریبی: ${toFaNum(detail.estimatedDays)} روز کاری`);
+  if (est.length) {
+    lines.push('', '📏 برآورد');
+    for (const e of est) lines.push(`• ${e}`);
+  }
+
+  // Suggestion + why
+  lines.push('', '💡 قیمت پیشنهادی');
+  lines.push(`• ${ask.suggestedFa || 'هنوز برآوردی ندارم'}`);
+  if (ask.range?.low && ask.range?.high) {
+    lines.push(`• بازهٔ مناسب این کار: ${fmtNum(ask.range.low)} تا ${fmtNum(ask.range.high)} تومان`);
+  }
+  const why = ask.reasonFa || (Number(ask.basedOnN) > 0 ? `بر اساس ${toFaNum(ask.basedOnN)} قیمت قبلی در کارهای مشابه` : 'از قواعد قیمت‌گذاری؛ کار مشابهی با قیمت ثبت‌شده ندارم');
+  lines.push(`• چرا این قیمت: ${why}`);
+  lines.push(
+    ask.reason === 'low_confidence'
+      ? '• چون از برآورد مطمئن نیستم، قیمت را از شما می‌پرسم.'
+      : '• کارفرما بودجه مشخص نکرده، قیمت را از شما می‌پرسم.'
+  );
+
+  const draft = cleanHumanReply(redactString(String(card.draftText || '')));
+  if (draft) {
+    lines.push('', '📝 پیش‌نویس پاسخ (بعد از تعیین قیمت نهایی می‌شود):', draft);
+  }
+  lines.push('', '«✅ همین قیمت» را بزنید یا «✏️ مبلغ دیگر» و مبلغ را به تومان بفرستید.');
+  return lines.join('\n');
+}
+
 export function formatRoomCard(card = {}) {
+  if (card.continuumAction === 'price_ask' && card.priceAsk) return formatPriceAskCard(card);
   const guest = card.guestName || card.guest_name || '—';
   const unread = card.unread != null ? Number(card.unread) : null;
   const project = card.project || {};
@@ -442,11 +526,8 @@ export function formatRoomCard(card = {}) {
     );
   }
 
-  let text = lines.filter((x) => x != null).join('\n');
-  if (text.length > 3900) {
-    text = text.slice(0, 3890) + '\n…';
-  }
-  return text;
+  // Long cards are split into sequential messages by the sender (split-text.js).
+  return lines.filter((x) => x != null).join('\n');
 }
 
 /**
@@ -533,15 +614,38 @@ export function formatLastMessagesBlock(messages = [], { max = 8, title = true }
 export function formatRoomMessagesView(card = {}) {
   const guest = card.guestName || card.guest_name || 'کارفرما';
   const messages = Array.isArray(card.messages) ? card.messages : [];
-  const block = formatLastMessagesBlock(messages, { max: 10, title: true });
+  const block = formatFullMessagesBlock(messages, { max: 12 });
+  const project = card.project || {};
+  const desc = stripHtml(String(project.description || '')).trim();
   return [
     '💬 پیام‌های گفتگو',
     '————————',
     '',
     `👤 ${redactString(String(guest))}`,
+    project.title ? `📁 ${redactString(String(project.title))}` : null,
     '',
     block || 'هنوز پیامی برای نمایش نیست.',
-  ].join('\n');
+    desc ? '' : null,
+    desc ? '📄 شرح کامل پروژه:' : null,
+    desc ? redactString(desc) : null,
+  ]
+    .filter((l) => l != null)
+    .join('\n');
+}
+
+/**
+ * Messages with their FULL text (for the messages screen; long output is split by the sender).
+ */
+export function formatFullMessagesBlock(messages = [], { max = 12 } = {}) {
+  const lastN = (Array.isArray(messages) ? messages : []).slice(-max);
+  const lines = ['💬 آخرین پیام‌ها'];
+  for (const m of lastN) {
+    const who = senderLabelFa(detectMessageSender(m));
+    const t = redactString(stripMsgMarkers(m.text || '')).trim();
+    if (!t) continue;
+    lines.push('', `${who} ${t}`);
+  }
+  return lines.length > 1 ? lines.join('\n') : '';
 }
 
 /**
