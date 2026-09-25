@@ -3,6 +3,7 @@
  * One-off / re-runnable: learn the owner's past manual prices (READ-ONLY GET requests).
  *   node scripts/crawl-prices.mjs            # crawl + print counts and anonymized samples
  *   node scripts/crawl-prices.mjs --no-chats # bids only
+ *   node scripts/crawl-prices.mjs --reparse-chats # forget chat-derived samples first, re-read them
  * Idempotent (ext_id per bid / chat message). Prints counts only: no names, ids or tokens.
  */
 import { loadAppConfig } from '../src/config.js';
@@ -20,6 +21,9 @@ const api = createKarlancerApi({
   timeoutMs: config.karlancerTimeoutMs,
 });
 
+// Only our own learned samples are touched (never Karlancer data).
+db.prepare(`DELETE FROM price_samples WHERE source IN ('bid','chat') AND amount_toman > 2000000000`).run();
+if (args.has('--reparse-chats')) db.prepare(`DELETE FROM price_samples WHERE source = 'chat' AND ext_id LIKE 'chat:%'`).run();
 const out = await crawlPastPrices({ db, api, includeChats: !args.has('--no-chats') });
 const total = db.prepare(`SELECT source, COUNT(*) AS n FROM price_samples GROUP BY source`).all();
 console.log(JSON.stringify({ bids: out.bids, chat: out.chat, errors: out.errors, totalBySource: total }, null, 2));
@@ -27,3 +31,4 @@ for (const s of samplePreview(db, { limit: 5 })) {
   console.log(`- ${s.title || '(بدون عنوان)'} | ${s.amount} تومان | ${s.days ?? '?'} روز | ${s.source}${s.won ? ' | برنده' : ''}`);
 }
 db.close();
+process.exit(0);

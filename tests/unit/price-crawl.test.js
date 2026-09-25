@@ -205,3 +205,10 @@ test('worker job pricing.crawl runs read-only and emits pricing.crawled', async 
   assert.equal(out.ok, true);
   assert.equal(out.result.bids.stored, 3);
 });
+
+test('extractSentPrice ignores phone / card numbers and unit-less figures', () => {
+  assert.equal(extractSentPrice('شماره کارت ۶۰۳۷۹۹۱۷۸۴۶۹۷۰۶۲ مبلغ ۳ میلیون تومان'), 3_000_000);
+  assert.equal(extractSentPrice('تماس: 09121234567 تومان'), null);
+  assert.equal(extractSentPrice('پروژه ۱۲۳۴۵۶۷ هزینه‌اش ۵۰۰ هزار تومان'), 500_000);
+  assert.equal(extractSentPrice('۲۵۰۰۰۰۰۰ ریال'), 2_500_000);
+});
