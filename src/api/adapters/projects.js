@@ -75,6 +75,14 @@ function normalizeProject(proj) {
     isExpired: proj.is_expired ?? proj.isExpired ?? null,
     slug: proj.url || proj.slug || null,
     state: proj.state || proj.status || null,
+    skills: (Array.isArray(proj.skills) ? proj.skills : Array.isArray(proj.tags) ? proj.tags : [])
+      .map((x) => (x && typeof x === 'object' ? x.title || x.name || null : x))
+      .filter(Boolean)
+      .map(String),
+    category:
+      (proj.category && typeof proj.category === 'object' ? proj.category.title || proj.category.name : proj.category) ||
+      proj.category_title ||
+      null,
     freelancerId: proj.freelancer_id ?? proj.worker_id ?? proj.assigned_freelancer_id ?? null,
     files: proj.files || proj.attachments || [],
     raw: proj,

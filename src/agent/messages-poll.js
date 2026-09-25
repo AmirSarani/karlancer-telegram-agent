@@ -162,8 +162,10 @@ export async function runMessagesPoll(ctx, payload = {}) {
               isFulltime: project.isFulltime ?? data.isRequiredFulltime,
               isUrgent: project.isUrgent,
               description: project.description
-                ? String(project.description).slice(0, 500)
+                ? String(project.description).slice(0, 20000)
                 : null,
+              skills: Array.isArray(project.skills) ? project.skills.slice(0, 15) : [],
+              category: project.category || null,
             }
           : null,
         projectSlug,

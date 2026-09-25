@@ -11,6 +11,7 @@ import {
   recordPriceSample,
   setRoomPriceAnswer,
 } from '../agent/price-memory.js';
+import { splitTelegramText } from './split-text.js';
 import { createRoomState } from '../agent/room-state.js';
 import { adaptDraftWithNote, analyzeRoomWithLlm } from '../agent/analyze-llm.js';
 import { getVerifiedMutation } from '../api/contracts/verified-mutation.js';
@@ -64,6 +65,25 @@ export function createRoomFlows(deps) {
   }
 
   async function editOrReply(ctx, text, extra = {}, { edit = false } = {}) {
+    const parts = splitTelegramText(String(text ?? ''));
+    if (parts.length > 1) {
+      const { reply_markup, ...rest } = extra || {};
+      let edited = false;
+      if (edit && ctx.callbackQuery) {
+        try {
+          await ctx.editMessageText(parts[0], rest);
+          edited = true;
+        } catch {
+          edited = false;
+        }
+      }
+      if (!edited) await ctx.reply(parts[0], { ...menuOpts(), ...rest });
+      for (let i = 1; i < parts.length; i++) {
+        const isLast = i === parts.length - 1;
+        await ctx.reply(parts[i], { ...rest, ...(isLast && reply_markup ? { reply_markup } : {}) });
+      }
+      return edited ? 'edited' : 'replied';
+    }
     if (edit && ctx.callbackQuery) {
       try {
         await ctx.editMessageText(text, extra);

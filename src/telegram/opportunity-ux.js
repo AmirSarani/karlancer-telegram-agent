@@ -2,6 +2,7 @@
  * Telegram UX for opportunities — hub, cards, scoring profile, rule editor, smart bid, decision inbox.
  */
 import { InlineKeyboard } from 'grammy';
+import { stripHtml } from '../agent/message-normalize.js';
 import {
   formatOpportunityNotify,
   formatOpportunityScanResultBody,
@@ -72,12 +73,9 @@ export function formatOpportunityDetails(card) {
     client.rate != null ? `★ ${client.rate}` : null,
     client.country || null,
   ].filter(Boolean);
-  const desc = String(o.description || o.desc || '').trim();
-  const descLine = desc
-    ? desc.length > 280
-      ? `${desc.slice(0, 279)}…`
-      : desc
-    : null;
+  // Full description; the sender splits long text into sequential messages.
+  const desc = stripHtml(String(o.fullDescription || o.description || o.desc || '')).trim();
+  const descLine = desc || null;
   const score = card.score ?? o.score ?? '—';
   return [
     '🔎 جزئیات فرصت',

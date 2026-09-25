@@ -159,3 +159,17 @@ Modules: `src/agent/scan-prepare.js`, `src/worker/handlers.js` (`rooms.scan` / `
   `postwin:latest` (shown in «🏆 پس از برد»).
 - Forced-approval requests (scan-prepare, follow-up, post-win) are audited as `gate.*`
   (`forced_approval`), so they never count toward the daily automatic limit.
+
+## Item 1 — full text (2026-09)
+
+- `src/telegram/split-text.js`: long text is split into sequential messages (≤ 3900 chars each,
+  numbered «(۱ از ۳)»), preferring paragraph/line/sentence/word boundaries; never inside an HTML tag,
+  entity or surrogate pair. Used by bot/room-flows `editOrReply`, `notifyOwner`, `editOwnerMessage` and
+  Bale notify. Buttons are attached to the last part.
+- «🔎 جزئیات فرصت» shows the complete description (HTML stripped); if the stored text looks shortened, the
+  public project page is read (read-only) and the longer text is used.
+- Room card no longer truncates at 3900; «👁 مشاهده» shows full message texts and the full project
+  description. Chat cards keep the full project description (was 500 chars) + skills/category.
+- «💰 چه قیمتی بدهم؟» card (`formatPriceAskCard`): title, full description, budget, category/skills,
+  the client's requests from the chat (analysis summary/requirements or their last messages), scope,
+  difficulty, days, suggested price, acceptable range and «چرا این قیمت».
